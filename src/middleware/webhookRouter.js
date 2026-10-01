@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { waitUntil } from "@vercel/functions";
 import { verifyShopifyWebhook } from "./verifyShopifyWebhook.js";
 import { WebhookIdempotencyStore } from "./webhookIdempotency.js";
 import { shopifyStores, getStoreConfig } from "../config/stores.js";
@@ -582,32 +583,32 @@ export function createWebhookRouter() {
   router.post("/products", (req, res) => {
     res.status(200).json({ status: "accepted" });
     const store = getStoreConfig(req.shopifyStoreId);
-    recordLock
+    waitUntil(recordLock
       .withLock(`product:${store.storeId}:${req.body?.id}`, () => handleProductWebhook(req.body, store))
       .catch((error) => {
         const context = { store: store.storeId, shopifyProductId: req.body?.id, err: error instanceof Error ? error.message : String(error) };
         logger.error(context, "Product webhook processing FAILED");
-        sendFailureAlert({ subject: "Product webhook failed", context });
-      });
+        return sendFailureAlert({ subject: "Product webhook failed", context });
+      }));
   });
 
   router.post("/customers", (req, res) => {
     res.status(200).json({ status: "accepted" });
     const store = getStoreConfig(req.shopifyStoreId);
-    recordLock
+    waitUntil(recordLock
       .withLock(`customer:${store.storeId}:${req.body?.id}`, () => handleCustomerWebhook(req.body, store))
       .catch((error) => {
         const context = { store: store.storeId, shopifyCustomerId: req.body?.id, err: error instanceof Error ? error.message : String(error) };
         logger.error(context, "Customer webhook processing FAILED");
-        sendFailureAlert({ subject: "Customer webhook failed", context });
-      });
+        return sendFailureAlert({ subject: "Customer webhook failed", context });
+      }));
   });
 
   router.post("/companies", (req, res) => {
     res.status(200).json({ status: "accepted" });
     const store = getStoreConfig(req.shopifyStoreId);
     const shopifyCompanyId = extractShopifyNumericId(req.body?.admin_graphql_api_id);
-    recordLock
+    waitUntil(recordLock
       .withLock(`company:${store.storeId}:${shopifyCompanyId}`, () => handleCompanyWebhook(req.body, store))
       .catch((error) => {
         const context = {
@@ -617,15 +618,15 @@ export function createWebhookRouter() {
           graphQLErrors: error?.graphQLErrors,
         };
         logger.error(context, "Company webhook processing FAILED");
-        sendFailureAlert({ subject: "Company webhook failed", context });
-      });
+        return sendFailureAlert({ subject: "Company webhook failed", context });
+      }));
   });
 
   router.post("/company_locations", (req, res) => {
     res.status(200).json({ status: "accepted" });
     const store = getStoreConfig(req.shopifyStoreId);
     const shopifyCompanyId = extractShopifyNumericId(req.body?.company?.admin_graphql_api_id);
-    recordLock
+    waitUntil(recordLock
       .withLock(`company:${store.storeId}:${shopifyCompanyId}`, () => handleCompanyLocationWebhook(req.body, store))
       .catch((error) => {
         const context = {
@@ -635,8 +636,8 @@ export function createWebhookRouter() {
           graphQLErrors: error?.graphQLErrors,
         };
         logger.error(context, "Company Location webhook processing FAILED");
-        sendFailureAlert({ subject: "Company Location webhook failed", context });
-      });
+        return sendFailureAlert({ subject: "Company Location webhook failed", context });
+      }));
   });
 
   router.post("/company_contacts", (req, res) => {
@@ -645,7 +646,7 @@ export function createWebhookRouter() {
     const shopifyCompanyId = extractShopifyNumericId(
       req.body?.company?.admin_graphql_api_id ?? req.body?.company_location?.company?.admin_graphql_api_id,
     );
-    recordLock
+    waitUntil(recordLock
       .withLock(`company:${store.storeId}:${shopifyCompanyId}`, () => handleCompanyContactWebhook(req.body, store))
       .catch((error) => {
         const context = {
@@ -656,20 +657,20 @@ export function createWebhookRouter() {
           graphQLErrors: error?.graphQLErrors,
         };
         logger.error(context, "Company Contact webhook processing FAILED");
-        sendFailureAlert({ subject: "Company Contact webhook failed", context });
-      });
+        return sendFailureAlert({ subject: "Company Contact webhook failed", context });
+      }));
   });
 
   router.post("/orders", (req, res) => {
     res.status(200).json({ status: "accepted" });
     const store = getStoreConfig(req.shopifyStoreId);
-    recordLock
+    waitUntil(recordLock
       .withLock(`order:${store.storeId}:${req.body?.id}`, () => handleOrderWebhook(req.body, store))
       .catch((error) => {
         const context = { store: store.storeId, shopifyOrderId: req.body?.id, err: error instanceof Error ? error.message : String(error) };
         logger.error(context, "Order webhook processing FAILED");
-        sendFailureAlert({ subject: "Order webhook failed", context });
-      });
+        return sendFailureAlert({ subject: "Order webhook failed", context });
+      }));
   });
 
   return router;

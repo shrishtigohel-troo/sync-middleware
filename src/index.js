@@ -16,6 +16,12 @@ app.get("/health", (_req, res) => {
 // implemented for any topic - see src/middleware/webhookRouter.js.
 app.use("/webhooks/shopify", createWebhookRouter());
 
-app.listen(env.PORT, () => {
-  logger.info({ port: env.PORT, nodeEnv: env.NODE_ENV }, "Middleware server listening");
-});
+// On Vercel the platform calls the exported app directly (see api/index.js),
+// so only open a port when running locally or on a normal server.
+if (!process.env.VERCEL) {
+  app.listen(env.PORT, () => {
+    logger.info({ port: env.PORT, nodeEnv: env.NODE_ENV }, "Middleware server listening");
+  });
+}
+
+export default app;
