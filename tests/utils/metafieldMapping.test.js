@@ -5,6 +5,8 @@ import {
   ensureMetafieldPropertyExists,
   isMetafieldDerivedProperty,
   fitExistingDropdownValues,
+  normalizeFieldLabel,
+  buildLabelIndex,
 } from "../../src/utils/metafieldMapping.js";
 
 describe("getMetafieldHubSpotPropertyName", () => {
@@ -212,5 +214,88 @@ describe("ensureMetafieldPropertyExists", () => {
     await ensureMetafieldPropertyExists("custom", "race_field", "single_line_text_field", existing);
 
     expect(existing.has("shopify_mf_custom_race_field")).toBe(true);
+  });
+});
+
+describe("normalizeFieldLabel - which names count as the same field", () => {
+  const same = (a, b) => normalizeFieldLabel(a) === normalizeFieldLabel(b);
+
+  it("treats names that differ only in capitals or spacing as the same", () => {
+    expect(same("Collection", "Collection")).toBe(true);
+    expect(same("Collection ", "Collection")).toBe(true); // Shopify's real definition name has a trailing space
+    expect(same("Retail Eligible", "retail eligible")).toBe(true);
+    expect(same("Retail  Eligible", "Retail Eligible")).toBe(true);
+  });
+
+  it("keeps similar but different names apart (real pairs from the store)", () => {
+    expect(same("Collection", "Collections")).toBe(false);
+    expect(same("Category", "Product Category")).toBe(false);
+    expect(same("Category", "Facebook Product Category")).toBe(false);
+    expect(same("Category", "Google Shopping Product Category")).toBe(false);
+    expect(same("Product Rating", "Loox Average Rating")).toBe(false);
+    expect(same("Loox Reviews (raw)", "Loox Number of Reviews")).toBe(false);
+    expect(same("Ingredients-list", "Ingredients list")).toBe(false);
+  });
+});
+
+describe("ensureMetafieldPropertyExists - no duplicate field names", () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const labelIndex = () =>
+    buildLabelIndex([
+      { name: "collection", label: "Collection" },
+      { name: "shopify_collections", label: "Collections" },
+      { name: "description", label: "Description" },
+    ]);
+
+  it("does not create a field when one with the same name already exists", async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => "{}" });
+    const existing = new Set();
+
+    await ensureMetafieldPropertyExists("custom", "description_2", "single_line_text_field", existing, {
+      displayName: "description ",
+      labelIndex: labelIndex(),
+    });
+
+    const createCalls = global.fetch.mock.calls.filter(([url]) => String(url).includes("/crm/v3/properties/products"));
+    expect(createCalls).toHaveLength(0);
+    expect(existing.has("shopify_mf_custom_description_2")).toBe(false);
+  });
+
+  it("still creates a field for a similar but different name (Collections vs Collection)", async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 201, text: async () => "{}" });
+    const existing = new Set();
+
+    await ensureMetafieldPropertyExists("custom", "collections_note", "single_line_text_field", existing, {
+      displayName: "Collections Note",
+      labelIndex: labelIndex(),
+    });
+
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.label).toBe("Collections Note");
+    expect(existing.has("shopify_mf_custom_collections_note")).toBe(true);
+  });
+
+  it("uses the Shopify display name as the new field's label", async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 201, text: async () => "{}" });
+
+    await ensureMetafieldPropertyExists("custom", "shade_code", "single_line_text_field", new Set(), {
+      displayName: "Shade Code",
+      labelIndex: labelIndex(),
+    });
+
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).label).toBe("Shade Code");
+  });
+
+  it("never re-checks a field the middleware already writes (e.g. the 4 mapped dropdowns)", async () => {
+    global.fetch = vi.fn();
+    await ensureMetafieldPropertyExists("custom", "collection", "single_line_text_field", new Set(["collection"]), {
+      displayName: "Collection ",
+      labelIndex: labelIndex(),
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

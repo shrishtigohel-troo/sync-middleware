@@ -2,6 +2,7 @@ import { extractPlainTextFromShopifyRichText } from "./shopifyRichText.js";
 import { PRODUCT_METAFIELD_DEFINITIONS } from "../config/productMetafields.js";
 import { getHubSpotClient } from "../hubspot/client.js";
 import { listObjectProperties } from "../hubspot/properties.js";
+import { sendFailureAlert } from "./emailAlert.js";
 import { logger } from "./logger.js";
 
 /**
@@ -225,9 +226,52 @@ const LONG_VALUE_METAFIELD_TYPES = new Set(["rich_text_field", "multi_line_text_
  * so the same mapping pass that triggered this can immediately write the
  * value too, instead of needing a second webhook delivery.
  */
-export async function ensureMetafieldPropertyExists(namespace, key, type, existingHubSpotProperties) {
+// Two labels are the same field name when they differ only in capital
+// letters or spacing. Anything else - a plural "s" (Collection vs
+// Collections), a hyphen, an extra word (Category vs Product Category) -
+// is a different name.
+export function normalizeFieldLabel(label) {
+  return String(label ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Map<normalized label, property names> for a HubSpot property list. */
+export function buildLabelIndex(propertyList) {
+  const index = new Map();
+  for (const property of propertyList) {
+    const label = normalizeFieldLabel(property.label);
+    index.set(label, [...(index.get(label) ?? []), property.name]);
+  }
+  return index;
+}
+
+// Conflicts already alerted on by this process, so every product save does
+// not send the same email again.
+const alertedLabelConflicts = new Set();
+
+export async function ensureMetafieldPropertyExists(namespace, key, type, existingHubSpotProperties, options = {}) {
   const propertyName = getMetafieldHubSpotPropertyName(namespace, key);
   if (existingHubSpotProperties.has(propertyName)) return;
+
+  const { displayName, labelIndex } = options;
+  const label = displayName?.trim() || `${namespace}.${key}`;
+
+  // Never create a second field with a label HubSpot already has (how the
+  // Category/Collection/Technical Family/Retail Eligible duplicates came
+  // about). The existing field is not written either - it may be unrelated
+  // (e.g. a metafield named "Description") - so the metafield is skipped and
+  // an alert asks for it to be mapped in src/config/productMetafields.js.
+  if (labelIndex) {
+    const conflicting = [label, `${namespace}.${key}`].flatMap((l) => labelIndex.get(normalizeFieldLabel(l)) ?? []);
+    if (conflicting.length > 0) {
+      const context = { metafield: `${namespace}.${key}`, metafieldName: label, existingHubSpotFields: [...new Set(conflicting)] };
+      logger.warn(context, "A HubSpot field with this metafield's name already exists - not creating a duplicate; metafield skipped until it is mapped");
+      if (!alertedLabelConflicts.has(context.metafield)) {
+        alertedLabelConflicts.add(context.metafield);
+        await sendFailureAlert({ subject: "Product metafield matches an existing HubSpot field - not synced until mapped", context });
+      }
+      return;
+    }
+  }
 
   const client = getHubSpotClient();
   const fieldType = LONG_VALUE_METAFIELD_TYPES.has(type) || type.startsWith("list.") ? "textarea" : "text";
@@ -235,13 +279,14 @@ export async function ensureMetafieldPropertyExists(namespace, key, type, existi
   try {
     await client.request("POST", "/crm/v3/properties/products", {
       name: propertyName,
-      label: `${namespace}.${key}`,
+      label,
       type: "string",
       fieldType,
       groupName: "productinformation",
     });
     existingHubSpotProperties.add(propertyName);
-    logger.info({ namespace, key, propertyName }, "Auto-created missing HubSpot property for a product metafield");
+    labelIndex?.set(normalizeFieldLabel(label), [propertyName]);
+    logger.info({ namespace, key, propertyName, label }, "Auto-created missing HubSpot property for a product metafield");
   } catch (error) {
     // A 409 (property already exists) can happen if two webhooks for
     // different variants of the same product both observe this metafield

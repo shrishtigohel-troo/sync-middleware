@@ -7,11 +7,16 @@ import { getShopifyClient } from "../shopify/client.js";
 import { getOrderPurchasingCompany } from "../shopify/queries/orders.js";
 import { getProductCategoryAndMetafields } from "../shopify/queries/products.js";
 import { getCompanyById } from "../shopify/queries/companies.js";
-import { getExistingPropertyNames } from "../hubspot/properties.js";
+import { getExistingPropertyNames, listObjectProperties } from "../hubspot/properties.js";
 import { HubSpotObjectApi } from "../hubspot/objects.js";
 import { associateRecords, getDefaultAssociationType, listAssociatedObjectIds } from "../hubspot/associations.js";
 import { mapWebhookProductVariantToHubSpot } from "../mappings/webhookProduct.js";
-import { ensureMetafieldPropertyExists, loadExistingDropdownOptions, fitExistingDropdownValues } from "../utils/metafieldMapping.js";
+import {
+  ensureMetafieldPropertyExists,
+  loadExistingDropdownOptions,
+  fitExistingDropdownValues,
+  buildLabelIndex,
+} from "../utils/metafieldMapping.js";
 import { mapWebhookCustomerToHubSpot } from "../mappings/webhookCustomer.js";
 import { mapCompanyLocationToHubSpot } from "../mappings/companyLocation.js";
 import { mapWebhookOrderToHubSpot, mapWebhookLineItemToHubSpot } from "../mappings/webhookOrder.js";
@@ -64,7 +69,9 @@ function resolveStoreFromRequest(req) {
 const recentlyUpsertedProductIds = new Map();
 
 async function handleProductWebhook(payload, store) {
-  const existingProperties = await getExistingPropertyNames("products");
+  const productPropertyList = await listObjectProperties("products");
+  const existingProperties = new Set(productPropertyList.map((p) => p.name));
+  const labelIndex = buildLabelIndex(productPropertyList);
   const productsApi = new HubSpotObjectApi("products");
 
   let categoryAndMetafields;
@@ -84,7 +91,10 @@ async function handleProductWebhook(payload, store) {
   // existingProperties in place so the mapping below picks them up
   // immediately, in this same webhook delivery.
   for (const node of categoryAndMetafields?.metafields ?? []) {
-    await ensureMetafieldPropertyExists(node.namespace, node.key, node.type, existingProperties);
+    await ensureMetafieldPropertyExists(node.namespace, node.key, node.type, existingProperties, {
+      displayName: node.definition?.name,
+      labelIndex,
+    });
   }
 
   const dropdownOptions = await loadExistingDropdownOptions();

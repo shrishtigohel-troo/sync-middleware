@@ -140,6 +140,9 @@ const GET_PRODUCT_CATEGORY_AND_METAFIELDS_QUERY = /* GraphQL */ `
             key
             value
             type
+            # The metafield's display name (e.g. "Retail Eligible"), used to
+            # avoid creating a HubSpot field that duplicates an existing label.
+            definition { name }
             reference {
               __typename
               ... on Metaobject { fields { key value } }
