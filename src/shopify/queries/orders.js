@@ -7,6 +7,11 @@ const ORDER_FIELDS = /* GraphQL */ `
   displayFinancialStatus
   displayFulfillmentStatus
   cancelledAt
+  # Shipment delivery status per fulfillment - decides Shipped vs Delivered, see src/config/orderPipeline.js.
+  fulfillments(first: 10) {
+    status
+    displayStatus
+  }
   currentTotalPriceSet {
     shopMoney {
       amount

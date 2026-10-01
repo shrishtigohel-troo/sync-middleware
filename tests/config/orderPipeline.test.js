@@ -7,9 +7,36 @@ describe("getOrderPipelineStageId", () => {
     expect(stage).toBe(ORDER_PIPELINE_STAGES.CANCELLED);
   });
 
-  it("returns Delivered when fulfilled", () => {
+  it("returns Shipped when fulfilled but the shipment is not delivered yet (not Delivered)", () => {
+    for (const status of [null, "in_transit", "out_for_delivery", "failure", "IN_TRANSIT", "FULFILLED", "NOT_DELIVERED"]) {
+      const stage = getOrderPipelineStageId({ cancelled: false, financialStatus: "paid", fulfillmentStatus: "fulfilled", shipmentStatuses: [status] });
+      expect(stage).toBe(ORDER_PIPELINE_STAGES.SHIPPED);
+    }
+  });
+
+  it("returns Shipped when fulfilled with no fulfillment details", () => {
     const stage = getOrderPipelineStageId({ cancelled: false, financialStatus: "paid", fulfillmentStatus: "fulfilled" });
+    expect(stage).toBe(ORDER_PIPELINE_STAGES.SHIPPED);
+  });
+
+  it("returns Delivered only when every shipment is delivered", () => {
+    expect(getOrderPipelineStageId({ cancelled: false, financialStatus: "paid", fulfillmentStatus: "fulfilled", shipmentStatuses: ["delivered"] }))
+      .toBe(ORDER_PIPELINE_STAGES.DELIVERED);
+    expect(getOrderPipelineStageId({ cancelled: false, financialStatus: "paid", fulfillmentStatus: "FULFILLED", shipmentStatuses: ["DELIVERED", "DELIVERED"] }))
+      .toBe(ORDER_PIPELINE_STAGES.DELIVERED);
+    // #3301: two shipments, one delivered - the native integration shows Shipped
+    expect(getOrderPipelineStageId({ cancelled: false, financialStatus: "paid", fulfillmentStatus: "fulfilled", shipmentStatuses: ["FULFILLED", "DELIVERED"] }))
+      .toBe(ORDER_PIPELINE_STAGES.SHIPPED);
+  });
+
+  it("returns Delivered for a partially refunded, delivered order", () => {
+    const stage = getOrderPipelineStageId({ cancelled: false, financialStatus: "partially_refunded", fulfillmentStatus: "fulfilled", shipmentStatuses: ["delivered"] });
     expect(stage).toBe(ORDER_PIPELINE_STAGES.DELIVERED);
+  });
+
+  it("returns Processed for a partially fulfilled order and for a refunded, unfulfilled order", () => {
+    expect(getOrderPipelineStageId({ cancelled: false, financialStatus: "paid", fulfillmentStatus: "partial" })).toBe(ORDER_PIPELINE_STAGES.PROCESSED);
+    expect(getOrderPipelineStageId({ cancelled: false, financialStatus: "REFUNDED", fulfillmentStatus: "FULFILLMENT_NOT_REQUIRED" })).toBe(ORDER_PIPELINE_STAGES.PROCESSED);
   });
 
   it("returns Processed when paid but not yet fulfilled", () => {

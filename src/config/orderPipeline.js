@@ -15,17 +15,31 @@ export const ORDER_PIPELINE_STAGES = {
 };
 
 /**
- * Derives the HubSpot Order pipeline stage from Shopify's own order status
- * fields, so every order synced by this middleware shows a stage in
- * HubSpot, not just orders the native Shopify integration also touched.
+ * Derives the HubSpot Order pipeline stage from Shopify's order status, the
+ * same way HubSpot's native Shopify integration does - compared live against
+ * its stages on 538 recent orders:
  *
- * Priority: cancelled always wins, regardless of payment/fulfillment state.
- * Otherwise: fulfilled -> Delivered, paid (not yet fulfilled) -> Processed,
- * anything else -> Open.
+ * - Cancelled: the order is cancelled (always wins)
+ * - Delivered: fulfilled, and the carrier has delivered every shipment
+ * - Shipped:   fulfilled, but not every shipment is delivered yet (in
+ *              transit, out for delivery, failed, or no tracking update)
+ * - Processed: paid or refunded, not fully fulfilled (includes partially
+ *              fulfilled)
+ * - Open:      anything else (e.g. payment pending)
+ *
+ * `shipmentStatuses` is one entry per non-cancelled fulfillment, in either
+ * Shopify form: REST `shipment_status` ("delivered", null) or GraphQL
+ * `displayStatus` ("DELIVERED", "IN_TRANSIT", "FULFILLED").
  */
-export function getOrderPipelineStageId({ cancelled, financialStatus, fulfillmentStatus }) {
+const PROCESSED_FINANCIAL_STATUSES = new Set(["paid", "partially_refunded", "refunded"]);
+
+export function getOrderPipelineStageId({ cancelled, financialStatus, fulfillmentStatus, shipmentStatuses = [] }) {
   if (cancelled) return ORDER_PIPELINE_STAGES.CANCELLED;
-  if ((fulfillmentStatus ?? "").toLowerCase() === "fulfilled") return ORDER_PIPELINE_STAGES.DELIVERED;
-  if ((financialStatus ?? "").toLowerCase() === "paid") return ORDER_PIPELINE_STAGES.PROCESSED;
+  if ((fulfillmentStatus ?? "").toLowerCase() === "fulfilled") {
+    const delivered =
+      shipmentStatuses.length > 0 && shipmentStatuses.every((status) => (status ?? "").toLowerCase() === "delivered");
+    return delivered ? ORDER_PIPELINE_STAGES.DELIVERED : ORDER_PIPELINE_STAGES.SHIPPED;
+  }
+  if (PROCESSED_FINANCIAL_STATUSES.has((financialStatus ?? "").toLowerCase())) return ORDER_PIPELINE_STAGES.PROCESSED;
   return ORDER_PIPELINE_STAGES.OPEN;
 }

@@ -82,6 +82,9 @@ export function mapWebhookOrderToHubSpot(payload, store, existingHubSpotProperti
       cancelled: Boolean(payload.cancelled_at),
       financialStatus: payload.financial_status,
       fulfillmentStatus: payload.fulfillment_status,
+      shipmentStatuses: (payload.fulfillments ?? [])
+        .filter((f) => f.status !== "cancelled")
+        .map((f) => f.shipment_status),
     }),
     // Native HubSpot Order fields behind the record's "Order total",
     // "Discount codes" and "Shipment details" cards - the same fields the

@@ -48,6 +48,9 @@ export function mapShopifyOrderToHubSpot(order, store, existingHubSpotProperties
       cancelled: Boolean(order.cancelledAt),
       financialStatus: order.displayFinancialStatus,
       fulfillmentStatus: order.displayFulfillmentStatus,
+      shipmentStatuses: (order.fulfillments ?? [])
+        .filter((f) => f.status !== "CANCELLED")
+        .map((f) => f.displayStatus),
     }),
     // HubSpot's own native reference fields (used by the native Shopify
     // integration). Writing these too lets our matching logic find - and

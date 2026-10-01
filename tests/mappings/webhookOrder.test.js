@@ -191,3 +191,25 @@ describe("mapWebhookLineItemToHubSpot - discounts and tax", () => {
     expect(p).toEqual({ amount: "24.60", discount: "1.05", tax: "0.25", hs_line_item_currency_code: "USD" });
   });
 });
+
+describe("mapWebhookOrderToHubSpot - Shipped vs Delivered stage", () => {
+  const props = new Set(["hs_pipeline_stage"]);
+  const stageOf = (overrides) => mapWebhookOrderToHubSpot(buildPayload(overrides), b2bStore, props).properties.hs_pipeline_stage;
+
+  it("is Shipped while the shipment is in transit, Delivered once delivered", () => {
+    const inTransit = stageOf({ fulfillment_status: "fulfilled", fulfillments: [{ status: "success", shipment_status: "in_transit" }] });
+    const delivered = stageOf({ fulfillment_status: "fulfilled", fulfillments: [{ status: "success", shipment_status: "delivered" }] });
+    expect(inTransit).not.toBe(delivered);
+    expect(stageOf({ fulfillment_status: "fulfilled", fulfillments: [{ status: "success", shipment_status: null }] })).toBe(inTransit);
+  });
+
+  it("ignores cancelled fulfillments", () => {
+    const delivered = stageOf({ fulfillment_status: "fulfilled", fulfillments: [{ status: "success", shipment_status: "delivered" }] });
+    expect(
+      stageOf({
+        fulfillment_status: "fulfilled",
+        fulfillments: [{ status: "success", shipment_status: "delivered" }, { status: "cancelled", shipment_status: null }],
+      }),
+    ).toBe(delivered);
+  });
+});
