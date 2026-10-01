@@ -59,4 +59,18 @@ describe("findExistingOrderId", () => {
 
     expect(result).toBeUndefined();
   });
+
+  it("prefers our own record over a native-integration record for the same order", async () => {
+    const ordersApi = buildOrdersApi({
+      results: [
+        { id: "native", properties: { shopify_store_id: null, shopify_order_id: null } },
+        { id: "ours", properties: { shopify_store_id: "b2b", shopify_order_id: "gid://shopify/Order/999" } },
+      ],
+    });
+    const existingProperties = new Set(["shopify_store_id", "shopify_order_id", "hs_source_store", "hs_external_order_id"]);
+
+    const result = await findExistingOrderId(ordersApi, store, "gid://shopify/Order/999", existingProperties);
+
+    expect(result).toBe("ours");
+  });
 });

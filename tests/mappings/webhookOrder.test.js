@@ -117,3 +117,77 @@ describe("mapWebhookLineItemToHubSpot", () => {
     expect(result.properties.shopify_line_item_id).toBe("gid://shopify/LineItem/17825698349118");
   });
 });
+
+describe("mapWebhookOrderToHubSpot - order total, discount and shipment cards", () => {
+  const all = new Set([
+    "hs_subtotal_price", "hs_order_discount", "hs_tax", "hs_shipping_cost", "hs_discount_codes",
+    "hs_payment_status", "hs_fulfillment_status", "hs_shipping_tracking_number", "hs_shipping_status_url",
+    "hs_external_order_url", "hs_tags", "hs_shipping_address_name", "hs_shipping_address_street",
+    "hs_shipping_address_city", "hs_shipping_address_state", "hs_shipping_address_country",
+    "hs_shipping_address_postal_code", "hs_shipping_address_phone", "hs_billing_address_city",
+  ]);
+  // Values taken from order #3653 as HubSpot's native integration synced it.
+  const payload = buildPayload({
+    current_subtotal_price: "1168.55",
+    current_total_discounts: "218.34",
+    current_total_tax: "81.82",
+    total_shipping_price_set: { shop_money: { amount: "0.00" } },
+    discount_codes: [{ code: "FREEAPRONSPERSHARON", amount: "218.34" }],
+    tags: "sales_rep_sharon558, sent-to-wms",
+    order_status_url: "https://pro.difiaba.com/orders/abc",
+    fulfillments: [{ tracking_numbers: ["1ZV5563D0312926285"], tracking_urls: ["https://ups.com/track/1ZV"] }],
+    shipping_address: { name: "deb malone", address1: "1330 Coral Ridge Dr", address2: null, city: "Coral Springs", province: "Florida", country: "United States", zip: "33071", phone: "9543404553" },
+    billing_address: { first_name: "deb", last_name: "malone", city: "Coral Springs" },
+  });
+
+  it("fills the Order total and Discount codes cards", () => {
+    const p = mapWebhookOrderToHubSpot(payload, b2bStore, all).properties;
+    expect(p).toMatchObject({
+      hs_subtotal_price: "1168.55",
+      hs_order_discount: "218.34",
+      hs_tax: "81.82",
+      hs_shipping_cost: "0.00",
+      hs_discount_codes: "FREEAPRONSPERSHARON",
+    });
+  });
+
+  it("fills the Shipment details card and addresses", () => {
+    const p = mapWebhookOrderToHubSpot(payload, b2bStore, all).properties;
+    expect(p).toMatchObject({
+      hs_payment_status: "Paid",
+      hs_fulfillment_status: "Fulfilled",
+      hs_shipping_tracking_number: "1ZV5563D0312926285",
+      hs_shipping_status_url: "https://ups.com/track/1ZV",
+      hs_shipping_address_street: "1330 Coral Ridge Dr",
+      hs_shipping_address_state: "Florida",
+      hs_shipping_address_postal_code: "33071",
+      hs_billing_address_city: "Coral Springs",
+    });
+  });
+
+  it("writes readable status labels and skips empty values", () => {
+    const p = mapWebhookOrderToHubSpot(
+      buildPayload({ financial_status: "partially_paid", fulfillment_status: null, discount_codes: [], tags: "" }),
+      b2bStore,
+      all,
+    ).properties;
+    expect(p.hs_payment_status).toBe("Partially paid");
+    expect(p.hs_fulfillment_status).toBe("Unfulfilled");
+    expect(p.hs_discount_codes).toBeUndefined();
+    expect(p.hs_tags).toBeUndefined();
+    expect(p.hs_shipping_address_city).toBeUndefined();
+  });
+});
+
+describe("mapWebhookLineItemToHubSpot - discounts and tax", () => {
+  it("uses discount_allocations (order-level codes) for the unit discount and line total", () => {
+    // Matches a #3653 line: 3 x $9.25, $3.15 discount, $0.25 tax.
+    const lineItem = {
+      id: 1, title: "Toner", quantity: 3, price: "9.25", total_discount: "0.00",
+      discount_allocations: [{ amount: "3.15" }], tax_lines: [{ price: "0.25" }],
+    };
+    const p = mapWebhookLineItemToHubSpot(lineItem, new Set(["amount", "discount", "tax", "hs_line_item_currency_code"]), "USD").properties;
+
+    expect(p).toEqual({ amount: "24.60", discount: "1.05", tax: "0.25", hs_line_item_currency_code: "USD" });
+  });
+});

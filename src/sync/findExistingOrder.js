@@ -39,6 +39,12 @@ export async function findExistingOrderId(ordersApi, store, shopifyOrderGid, exi
 
   if (filterGroups.length === 0) return undefined;
 
-  const result = await ordersApi.searchByFilterGroups(filterGroups);
-  return result.results[0]?.id;
+  const result = await ordersApi.searchByFilterGroups(filterGroups, ["shopify_store_id", "shopify_order_id"]);
+  // When both our own record and a native-integration record exist for the
+  // same order, always pick ours - taking whichever came back first once
+  // updated the native record instead (confirmed live on order #3803).
+  const ownRecord = result.results.find(
+    (r) => r.properties?.shopify_store_id === store.storeId && r.properties?.shopify_order_id === shopifyOrderGid,
+  );
+  return (ownRecord ?? result.results[0])?.id;
 }

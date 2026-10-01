@@ -459,7 +459,7 @@ export async function removeDuplicateLineItems(lineItemsApi, hubspotOrderId) {
  * (getOrderPurchasingCompany) to fetch it directly from Shopify rather
  * than guessing at an unconfirmed webhook field name.
  */
-async function handleOrderWebhook(payload, store) {
+export async function handleOrderWebhook(payload, store) {
   const [existingOrderProperties, existingLineItemProperties] = await Promise.all([
     getExistingPropertyNames("orders"),
     getExistingPropertyNames("line_items"),
@@ -573,7 +573,7 @@ async function handleOrderWebhook(payload, store) {
   let lineItemsCreated = 0;
   let lineItemsUpdated = 0;
   for (const lineItem of payload.line_items ?? []) {
-    const { properties: lineItemProperties } = mapWebhookLineItemToHubSpot(lineItem, existingLineItemProperties);
+    const { properties: lineItemProperties } = mapWebhookLineItemToHubSpot(lineItem, existingLineItemProperties, payload.currency);
     if (Object.keys(lineItemProperties).length === 0) continue;
 
     // Matched via the custom shopify_line_item_id property, checking this
