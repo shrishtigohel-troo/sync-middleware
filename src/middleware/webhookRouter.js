@@ -4,12 +4,12 @@ import { verifyShopifyWebhook } from "./verifyShopifyWebhook.js";
 import { WebhookIdempotencyStore } from "./webhookIdempotency.js";
 import { shopifyStores, getStoreConfig } from "../config/stores.js";
 import { getShopifyClient } from "../shopify/client.js";
-import { getOrderPurchasingLocationId } from "../shopify/queries/orders.js";
+import { getOrderPurchasingCompany } from "../shopify/queries/orders.js";
 import { getProductCategoryAndMetafields } from "../shopify/queries/products.js";
 import { getCompanyById } from "../shopify/queries/companies.js";
 import { getExistingPropertyNames } from "../hubspot/properties.js";
 import { HubSpotObjectApi } from "../hubspot/objects.js";
-import { associateRecords, getDefaultAssociationType } from "../hubspot/associations.js";
+import { associateRecords, getDefaultAssociationType, listAssociatedObjectIds } from "../hubspot/associations.js";
 import { mapWebhookProductVariantToHubSpot } from "../mappings/webhookProduct.js";
 import { ensureMetafieldPropertyExists } from "../utils/metafieldMapping.js";
 import { mapWebhookCustomerToHubSpot } from "../mappings/webhookCustomer.js";
@@ -214,6 +214,23 @@ async function upsertHubSpotCompanyLocation(shopifyLocationGid, properties, exis
       { propertyName: "shopify_location_id", operator: "EQ", value: shopifyLocationGid },
     ]);
     existingId = result.results[0]?.id;
+
+    // Records created before the one-record-per-location model have the
+    // right shopify_company_id but no shopify_location_id, so the search
+    // above never finds them - and orders, which match companies by
+    // location, never get associated. Adopt such a record (setting its
+    // location id below) instead of creating a duplicate beside it.
+    const shopifyCompanyGid = properties.shopify_company_id;
+    if (!existingId && shopifyCompanyGid && existingProperties.has("shopify_company_id")) {
+      const legacy = await companiesApi.searchByFilters([
+        { propertyName: "shopify_company_id", operator: "EQ", value: shopifyCompanyGid },
+        { propertyName: "shopify_location_id", operator: "NOT_HAS_PROPERTY" },
+      ]);
+      existingId = legacy.results[0]?.id;
+      if (existingId) {
+        logger.info({ shopifyLocationGid, hubspotCompanyId: existingId }, "Adopting legacy company record that had no shopify_location_id");
+      }
+    }
   } else if (!existingId) {
     logger.warn(
       { shopifyLocationGid },
@@ -365,6 +382,67 @@ async function handleCompanyContactWebhook(payload, store) {
 const recentlyUpsertedOrderIds = new Map();
 
 /**
+ * Finds the HubSpot Company record for an order's purchasing location: by
+ * shopify_location_id, or else a legacy record for the same Shopify company
+ * that has no location id yet (created before one-record-per-location -
+ * see upsertHubSpotCompanyLocation). A legacy record is given the location
+ * id so later lookups match it directly. Returns undefined if neither exists.
+ */
+export async function findCompanyRecordForLocation({ companyId, locationId }, existingCompanyProperties) {
+  const companiesApi = new HubSpotObjectApi("companies");
+  const cachedId = recentlyUpsertedLocationRecordIds.get(locationId);
+  if (cachedId) return cachedId;
+
+  const byLocation = await companiesApi.searchByFilters([
+    { propertyName: "shopify_location_id", operator: "EQ", value: locationId },
+  ]);
+  if (byLocation.results[0]) return byLocation.results[0].id;
+
+  if (!companyId || !existingCompanyProperties.has("shopify_company_id")) return undefined;
+  const legacy = await companiesApi.searchByFilters([
+    { propertyName: "shopify_company_id", operator: "EQ", value: companyId },
+    { propertyName: "shopify_location_id", operator: "NOT_HAS_PROPERTY" },
+  ]);
+  const legacyId = legacy.results[0]?.id;
+  if (legacyId) {
+    await companiesApi.update(legacyId, { shopify_location_id: locationId });
+    recentlyUpsertedLocationRecordIds.set(locationId, legacyId);
+    logger.info({ shopifyLocationGid: locationId, hubspotCompanyId: legacyId }, "Adopting legacy company record that had no shopify_location_id");
+  }
+  return legacyId;
+}
+
+/**
+ * Archives any extra copies of the same Shopify line item on one HubSpot
+ * order, keeping the lowest record id. On Vercel two webhooks for the same
+ * order can run at the same moment in separate instances (the in-memory
+ * ConcurrencyLock does not span instances), so both can create the same
+ * line item before either sees the other's. Every run keeps the same
+ * record, so two runs cleaning up at once still agree. Only middleware
+ * line items (those with shopify_line_item_id) are touched.
+ */
+export async function removeDuplicateLineItems(lineItemsApi, hubspotOrderId) {
+  const byShopifyId = new Map();
+  for (const id of await listAssociatedObjectIds("orders", hubspotOrderId, "line_items")) {
+    const record = await lineItemsApi.getById(id, ["shopify_line_item_id"]);
+    const shopifyLineItemGid = record.properties?.shopify_line_item_id;
+    if (!shopifyLineItemGid) continue;
+    if (!byShopifyId.has(shopifyLineItemGid)) byShopifyId.set(shopifyLineItemGid, []);
+    byShopifyId.get(shopifyLineItemGid).push(id);
+  }
+
+  let removed = 0;
+  for (const ids of byShopifyId.values()) {
+    ids.sort((a, b) => (BigInt(a) < BigInt(b) ? -1 : 1));
+    for (const duplicateId of ids.slice(1)) {
+      await lineItemsApi.archive(duplicateId);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+/**
  * Processes a single order webhook payload: creates/updates one HubSpot
  * Order (compound-key matched), its line items, and associates the order to
  * its Contact (matched by email) and, if the order has a B2B purchasing
@@ -378,7 +456,7 @@ const recentlyUpsertedOrderIds = new Map();
  *
  * The REST order webhook payload does not reliably include the B2B
  * purchasing company/location, so this makes one extra GraphQL lookup
- * (getOrderPurchasingLocationId) to fetch it directly from Shopify rather
+ * (getOrderPurchasingCompany) to fetch it directly from Shopify rather
  * than guessing at an unconfirmed webhook field name.
  */
 async function handleOrderWebhook(payload, store) {
@@ -453,16 +531,17 @@ async function handleOrderWebhook(payload, store) {
     const orderToCompanyAssociation = await getDefaultAssociationType("orders", "companies");
     if (existingCompanyProperties.has("shopify_location_id") && orderToCompanyAssociation) {
       const shopify = getShopifyClient(store);
-      const purchasingLocationId = await getOrderPurchasingLocationId(shopify, toShopifyGid("Order", payload.id));
-      if (purchasingLocationId) {
-        const companiesApi = new HubSpotObjectApi("companies");
-        const companyMatch = await companiesApi.searchByFilters([
-          { propertyName: "shopify_location_id", operator: "EQ", value: purchasingLocationId },
-        ]);
-        const hubspotCompanyId = companyMatch.results[0]?.id;
-        if (hubspotCompanyId) {
-          await associateRecords("orders", hubspotOrderId, "companies", hubspotCompanyId, [orderToCompanyAssociation]);
-        }
+      const purchasing = await getOrderPurchasingCompany(shopify, toShopifyGid("Order", payload.id));
+      const hubspotCompanyId = purchasing?.locationId
+        ? await findCompanyRecordForLocation(purchasing, existingCompanyProperties)
+        : undefined;
+      if (hubspotCompanyId) {
+        await associateRecords("orders", hubspotOrderId, "companies", hubspotCompanyId, [orderToCompanyAssociation]);
+      } else if (purchasing?.locationId) {
+        logger.warn(
+          { shopifyOrderId: payload.id, ...purchasing },
+          "No HubSpot Company found for this order's purchasing location - order not associated to a company",
+        );
       }
     }
   } catch (error) {
@@ -474,18 +553,35 @@ async function handleOrderWebhook(payload, store) {
 
   const lineItemToOrderAssociation = await getDefaultAssociationType("line_items", "orders");
 
+  // Line items already attached to this HubSpot order, keyed by
+  // shopify_line_item_id. Read through the order's associations (strongly
+  // consistent) rather than relying only on the Search API: orders/create
+  // and orders/updated land back to back, and the second webhook's search
+  // could not see the line item the first had just created, giving the
+  // order two copies of every line item - confirmed live on order #3802.
+  const attachedLineItemIds = new Map();
+  if (existingLineItemProperties.has("shopify_line_item_id")) {
+    for (const id of await listAssociatedObjectIds("orders", hubspotOrderId, "line_items")) {
+      const record = await lineItemsApi.getById(id, ["shopify_line_item_id"]);
+      const shopifyLineItemGid = record.properties?.shopify_line_item_id;
+      if (shopifyLineItemGid && !attachedLineItemIds.has(shopifyLineItemGid)) {
+        attachedLineItemIds.set(shopifyLineItemGid, id);
+      }
+    }
+  }
+
   let lineItemsCreated = 0;
   let lineItemsUpdated = 0;
   for (const lineItem of payload.line_items ?? []) {
     const { properties: lineItemProperties } = mapWebhookLineItemToHubSpot(lineItem, existingLineItemProperties);
     if (Object.keys(lineItemProperties).length === 0) continue;
 
-    // Matched via the custom shopify_line_item_id property - see src/sync/findExistingLineItem.js.
-    const existingLineItemId = await findExistingLineItemId(
-      lineItemsApi,
-      toShopifyGid("LineItem", lineItem.id),
-      existingLineItemProperties,
-    );
+    // Matched via the custom shopify_line_item_id property, checking this
+    // order's attached line items first, then search - see src/sync/findExistingLineItem.js.
+    const shopifyLineItemGid = toShopifyGid("LineItem", lineItem.id);
+    const existingLineItemId =
+      attachedLineItemIds.get(shopifyLineItemGid) ??
+      (await findExistingLineItemId(lineItemsApi, shopifyLineItemGid, existingLineItemProperties));
 
     let hubspotLineItemId;
     if (existingLineItemId) {
@@ -503,8 +599,12 @@ async function handleOrderWebhook(payload, store) {
     }
   }
 
+  const lineItemsRemoved = existingLineItemProperties.has("shopify_line_item_id")
+    ? await removeDuplicateLineItems(lineItemsApi, hubspotOrderId)
+    : 0;
+
   logger.info(
-    { shopifyOrderId: payload.id, hubspotOrderId, operation: orderOperation, lineItemsCreated, lineItemsUpdated },
+    { shopifyOrderId: payload.id, hubspotOrderId, operation: orderOperation, lineItemsCreated, lineItemsUpdated, lineItemsRemoved },
     "Order webhook processed successfully",
   );
 }

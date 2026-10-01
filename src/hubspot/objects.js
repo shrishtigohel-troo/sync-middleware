@@ -26,6 +26,11 @@ export class HubSpotObjectApi {
     return client.request("PATCH", `/crm/v3/objects/${this.objectType}/${id}`, { properties });
   }
 
+  async archive(id) {
+    const client = getHubSpotClient();
+    await client.request("DELETE", `/crm/v3/objects/${this.objectType}/${id}`);
+  }
+
   async getById(id, propertiesToFetch) {
     const client = getHubSpotClient();
     const qs = propertiesToFetch?.length ? `?properties=${propertiesToFetch.join(",")}` : "";

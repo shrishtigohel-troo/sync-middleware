@@ -28,6 +28,28 @@ export async function associateRecords(fromObjectType, fromObjectId, toObjectTyp
 }
 
 /**
+ * Lists the ids of every record of `toObjectType` associated with one
+ * record. Unlike the CRM Search API this is strongly consistent, so a
+ * record associated a second ago is already returned - see the line item
+ * matching in src/middleware/webhookRouter.js.
+ */
+export async function listAssociatedObjectIds(fromObjectType, fromObjectId, toObjectType) {
+  const client = getHubSpotClient();
+  const ids = [];
+  let after;
+  do {
+    const qs = after ? `?limit=500&after=${after}` : "?limit=500";
+    const data = await client.request(
+      "GET",
+      `/crm/v4/objects/${fromObjectType}/${fromObjectId}/associations/${toObjectType}${qs}`,
+    );
+    for (const result of data.results ?? []) ids.push(String(result.toObjectId));
+    after = data.paging?.next?.after;
+  } while (after);
+  return ids;
+}
+
+/**
  * Looks up the real association type IDs HubSpot has defined between two
  * object types, rather than hardcoding a guessed numeric ID (which would
  * silently point at the wrong association if wrong). Callers should pick

@@ -145,7 +145,16 @@ const GET_ORDER_PURCHASING_COMPANY_QUERY = /* GraphQL */ `
  * order (rare, but defensively handled).
  */
 export async function getOrderPurchasingLocationId(client, orderGid) {
+  return (await getOrderPurchasingCompany(client, orderGid))?.locationId;
+}
+
+/**
+ * Same lookup, returning both the purchasing company and location gids
+ * ({ companyId, locationId }), or undefined if this is not a B2B order.
+ */
+export async function getOrderPurchasingCompany(client, orderGid) {
   const data = await client.request(GET_ORDER_PURCHASING_COMPANY_QUERY, { id: orderGid });
   const entity = data.order?.purchasingEntity;
-  return entity?.__typename === "PurchasingCompany" ? entity.location?.id : undefined;
+  if (entity?.__typename !== "PurchasingCompany") return undefined;
+  return { companyId: entity.company?.id, locationId: entity.location?.id };
 }
