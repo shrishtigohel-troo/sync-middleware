@@ -1,0 +1,40 @@
+{
+  "name": "shopify-hubspot-middleware",
+  "version": "0.1.0",
+  "description": "Custom middleware connecting Shopify Plus (B2B & B2C) to HubSpot CRM",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:shopify": "node scripts/check-shopify-connection.js",
+    "check:hubspot": "node scripts/check-hubspot-connection.js",
+    "poc:product-sync": "node scripts/poc-product-sync.js",
+    "poc:customer-sync": "node scripts/poc-customer-sync.js",
+    "poc:company-sync": "node scripts/poc-company-sync.js",
+    "poc:order-sync": "node scripts/poc-order-sync.js",
+    "migrate:products": "node scripts/migrate-products.js",
+    "migrate:orders": "node scripts/migrate-orders.js",
+    "migrate:customers": "node scripts/migrate-customers.js",
+    "migrate:companies": "node scripts/migrate-companies.js",
+    "migrate:deals": "node scripts/migrate-deals.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "graphql-request": "^7.1.2",
+    "pino": "^9.3.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.3"
+  }
+}
