@@ -11,7 +11,7 @@ import { getExistingPropertyNames } from "../hubspot/properties.js";
 import { HubSpotObjectApi } from "../hubspot/objects.js";
 import { associateRecords, getDefaultAssociationType, listAssociatedObjectIds } from "../hubspot/associations.js";
 import { mapWebhookProductVariantToHubSpot } from "../mappings/webhookProduct.js";
-import { ensureMetafieldPropertyExists } from "../utils/metafieldMapping.js";
+import { ensureMetafieldPropertyExists, loadExistingDropdownOptions, fitExistingDropdownValues } from "../utils/metafieldMapping.js";
 import { mapWebhookCustomerToHubSpot } from "../mappings/webhookCustomer.js";
 import { mapCompanyLocationToHubSpot } from "../mappings/companyLocation.js";
 import { mapWebhookOrderToHubSpot, mapWebhookLineItemToHubSpot } from "../mappings/webhookOrder.js";
@@ -87,12 +87,17 @@ async function handleProductWebhook(payload, store) {
     await ensureMetafieldPropertyExists(node.namespace, node.key, node.type, existingProperties);
   }
 
+  const dropdownOptions = await loadExistingDropdownOptions();
+  const unmatchedDropdownValues = new Map();
+
   let created = 0;
   let updated = 0;
   let skipped = 0;
 
   for (const variant of payload.variants ?? []) {
-    const { properties } = mapWebhookProductVariantToHubSpot(payload, variant, existingProperties, categoryAndMetafields);
+    const mapped = mapWebhookProductVariantToHubSpot(payload, variant, existingProperties, categoryAndMetafields);
+    const { properties, unmatched } = fitExistingDropdownValues(mapped.properties, dropdownOptions);
+    for (const u of unmatched) unmatchedDropdownValues.set(`${u.propertyName}=${u.value}`, u);
     if (Object.keys(properties).length === 0) {
       skipped += 1;
       continue;
@@ -127,6 +132,12 @@ async function handleProductWebhook(payload, store) {
       created += 1;
     }
     recentlyUpsertedProductIds.set(variantCacheKey, hubspotProductId);
+  }
+
+  if (unmatchedDropdownValues.size > 0) {
+    const context = { store: store.storeId, shopifyProductId: payload.id, productTitle: payload.title, unmatched: [...unmatchedDropdownValues.values()] };
+    logger.warn(context, "Metafield value is not an option of the existing HubSpot dropdown - that field was not written");
+    await sendFailureAlert({ subject: "Product metafield value not in HubSpot dropdown", context });
   }
 
   logger.info(

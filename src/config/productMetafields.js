@@ -22,11 +22,17 @@ import { extractPlainTextFromShopifyRichText } from "../utils/shopifyRichText.js
  * this list predates that fuller resolution being built, kept mainly for
  * the property pre-creation script).
  */
+// existingHubSpotDropdown: these four write into dropdown properties that
+// already existed in HubSpot (created 2026-08-03, before this middleware)
+// with the same labels, instead of the shopify_* copies the middleware
+// created alongside them on 2026-09-21. The middleware never changes these
+// properties' definitions and never clears their values - see
+// fitExistingDropdownValues in src/utils/metafieldMapping.js.
 export const PRODUCT_METAFIELD_DEFINITIONS = [
-  { namespace: "custom", key: "category", name: "Category", type: "single_line_text_field", handling: "text", hubspotProperty: "shopify_category_metafield" },
-  { namespace: "custom", key: "technical_family", name: "Technical Family", type: "single_line_text_field", handling: "text", hubspotProperty: "shopify_technical_family" },
-  { namespace: "custom", key: "collection", name: "Collection", type: "single_line_text_field", handling: "text", hubspotProperty: "shopify_collection" },
-  { namespace: "custom", key: "retail_eligible", name: "Retail Eligible", type: "single_line_text_field", handling: "text", hubspotProperty: "shopify_mf_retail_eligible" },
+  { namespace: "custom", key: "category", name: "Category", type: "single_line_text_field", handling: "text", hubspotProperty: "category", existingHubSpotDropdown: true },
+  { namespace: "custom", key: "technical_family", name: "Technical Family", type: "single_line_text_field", handling: "text", hubspotProperty: "family", existingHubSpotDropdown: true },
+  { namespace: "custom", key: "collection", name: "Collection", type: "single_line_text_field", handling: "text", hubspotProperty: "collection", existingHubSpotDropdown: true },
+  { namespace: "custom", key: "retail_eligible", name: "Retail Eligible", type: "single_line_text_field", handling: "text", hubspotProperty: "kind", existingHubSpotDropdown: true },
   { namespace: "custom", key: "subtitle", name: "Subtitle", type: "single_line_text_field", handling: "text", hubspotProperty: "shopify_mf_subtitle" },
   { namespace: "custom", key: "overview_title", name: "Overview Title", type: "single_line_text_field", handling: "text", hubspotProperty: "shopify_mf_overview_title" },
   { namespace: "custom", key: "faq_q1", name: "FAQ Q1", type: "single_line_text_field", handling: "text", hubspotProperty: "shopify_mf_faq_q1" },

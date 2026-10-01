@@ -3,6 +3,7 @@ import { getExistingPropertyNames } from "../hubspot/properties.js";
 import { HubSpotObjectApi } from "../hubspot/objects.js";
 import { mapShopifyVariantToHubSpot } from "../mappings/product.js";
 import { findExistingProductId } from "./findExistingProduct.js";
+import { loadExistingDropdownOptions, fitExistingDropdownValues } from "../utils/metafieldMapping.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -19,6 +20,7 @@ import { logger } from "../utils/logger.js";
 export async function migrateProducts(shopify, store) {
   const existingProperties = await getExistingPropertyNames("products");
   const productsApi = new HubSpotObjectApi("products");
+  const dropdownOptions = await loadExistingDropdownOptions();
 
   const summary = {
     productsProcessed: 0,
@@ -26,6 +28,7 @@ export async function migrateProducts(shopify, store) {
     variantsUpdated: 0,
     variantsFailed: 0,
     variantsSkippedNoProperties: 0,
+    dropdownValuesNotWritten: 0,
   };
 
   for await (const product of iterateAllActiveProducts(shopify)) {
@@ -33,7 +36,16 @@ export async function migrateProducts(shopify, store) {
     const variants = product.variants.edges.map((e) => e.node);
 
     for (const variant of variants) {
-      const { properties, skippedMissingProperties } = mapShopifyVariantToHubSpot(product, variant, existingProperties);
+      const mapped = mapShopifyVariantToHubSpot(product, variant, existingProperties);
+      const { skippedMissingProperties } = mapped;
+      const { properties, unmatched } = fitExistingDropdownValues(mapped.properties, dropdownOptions);
+      if (unmatched.length > 0) {
+        summary.dropdownValuesNotWritten += unmatched.length;
+        logger.warn(
+          { store: store.storeId, shopifyProductId: product.id, shopifyVariantId: variant.id, unmatched },
+          "Metafield value is not an option of the existing HubSpot dropdown - that field was not written",
+        );
+      }
 
       if (Object.keys(properties).length === 0) {
         summary.variantsSkippedNoProperties += 1;

@@ -1,6 +1,7 @@
 import { extractPlainTextFromShopifyRichText } from "./shopifyRichText.js";
 import { PRODUCT_METAFIELD_DEFINITIONS } from "../config/productMetafields.js";
 import { getHubSpotClient } from "../hubspot/client.js";
+import { listObjectProperties } from "../hubspot/properties.js";
 import { logger } from "./logger.js";
 
 /**
@@ -57,7 +58,70 @@ const LEGACY_PROPERTY_OVERRIDE_VALUES = new Set(Object.values(LEGACY_PROPERTY_OV
  * sync only ever writes a value when one exists, never clears one.
  */
 export function isMetafieldDerivedProperty(propertyName) {
+  if (EXISTING_DROPDOWN_PROPERTIES.has(propertyName) || RETIRED_DUPLICATE_PROPERTIES.has(propertyName)) return false;
   return propertyName.startsWith("shopify_mf_") || LEGACY_PROPERTY_OVERRIDE_VALUES.has(propertyName);
+}
+
+/**
+ * Pre-existing HubSpot dropdown properties some metafields write into
+ * (`existingHubSpotDropdown` in src/config/productMetafields.js). They hold
+ * data entered in HubSpot before this middleware existed (e.g. Retail
+ * Eligible on 146 products, while Shopify has it on only a handful), so
+ * they are excluded from isMetafieldDerivedProperty above: an empty
+ * Shopify metafield leaves the HubSpot value as it is instead of clearing it.
+ */
+export const EXISTING_DROPDOWN_PROPERTIES = new Set(
+  PRODUCT_METAFIELD_DEFINITIONS.filter((d) => d.existingHubSpotDropdown).map((d) => d.hubspotProperty),
+);
+
+// The middleware's own copies of those four, no longer written. Left as
+// they are (never cleared) until someone decides to delete them in HubSpot.
+const RETIRED_DUPLICATE_PROPERTIES = new Set([
+  "shopify_category_metafield",
+  "shopify_collection",
+  "shopify_technical_family",
+  "shopify_metafield_technical_family",
+  "shopify_mf_retail_eligible",
+]);
+
+const normalizeOption = (value) => String(value).trim().toLowerCase();
+
+/**
+ * Reads the current options of the pre-existing dropdown properties:
+ * Map<propertyName, Map<normalized option, exact option value>>. Call once
+ * per sync run/webhook, not per variant.
+ */
+export async function loadExistingDropdownOptions() {
+  const options = new Map();
+  for (const property of await listObjectProperties("products")) {
+    if (!EXISTING_DROPDOWN_PROPERTIES.has(property.name)) continue;
+    options.set(property.name, new Map((property.options ?? []).map((o) => [normalizeOption(o.value), o.value])));
+  }
+  return options;
+}
+
+/**
+ * Rewrites values for the pre-existing dropdown properties to the exact
+ * option HubSpot expects (Shopify "COLOR KEEP" -> option "Color Keep").
+ * A value matching no option is removed from the write and returned in
+ * `unmatched`, rather than adding an option (the property definitions are
+ * never changed) or letting HubSpot reject the whole product update.
+ * Returns { properties, unmatched: [{ propertyName, value }] }.
+ */
+export function fitExistingDropdownValues(properties, dropdownOptions) {
+  const fitted = { ...properties };
+  const unmatched = [];
+  for (const propertyName of EXISTING_DROPDOWN_PROPERTIES) {
+    if (!(propertyName in fitted)) continue;
+    const exact = dropdownOptions.get(propertyName)?.get(normalizeOption(fitted[propertyName]));
+    if (exact === undefined) {
+      unmatched.push({ propertyName, value: fitted[propertyName] });
+      delete fitted[propertyName];
+    } else {
+      fitted[propertyName] = exact;
+    }
+  }
+  return { properties: fitted, unmatched };
 }
 
 /**

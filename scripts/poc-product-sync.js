@@ -5,6 +5,7 @@ import { getExistingPropertyNames } from "../src/hubspot/properties.js";
 import { HubSpotObjectApi } from "../src/hubspot/objects.js";
 import { mapShopifyVariantToHubSpot } from "../src/mappings/product.js";
 import { logger } from "../src/utils/logger.js";
+import { loadExistingDropdownOptions, fitExistingDropdownValues } from "../src/utils/metafieldMapping.js";
 
 /**
  * Controlled, single-product proof of concept:
@@ -55,11 +56,17 @@ async function main() {
   logger.info("Verifying HubSpot Product property configuration...");
   const existingProperties = await getExistingPropertyNames("products");
   const productsApi = new HubSpotObjectApi("products");
+  const dropdownOptions = await loadExistingDropdownOptions();
 
   let failures = 0;
 
   for (const variant of variants) {
-    const { properties, skippedMissingProperties } = mapShopifyVariantToHubSpot(product, variant, existingProperties);
+    const mapped = mapShopifyVariantToHubSpot(product, variant, existingProperties);
+    const { skippedMissingProperties } = mapped;
+    const { properties, unmatched } = fitExistingDropdownValues(mapped.properties, dropdownOptions);
+    if (unmatched.length > 0) {
+      logger.warn({ shopifyVariantId: variant.id, unmatched }, "Metafield value is not an option of the existing HubSpot dropdown - that field was not written");
+    }
 
     if (Object.keys(properties).length === 0) {
       logger.error(

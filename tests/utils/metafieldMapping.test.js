@@ -3,6 +3,8 @@ import {
   getMetafieldHubSpotPropertyName,
   convertMetafieldValue,
   ensureMetafieldPropertyExists,
+  isMetafieldDerivedProperty,
+  fitExistingDropdownValues,
 } from "../../src/utils/metafieldMapping.js";
 
 describe("getMetafieldHubSpotPropertyName", () => {
@@ -18,10 +20,50 @@ describe("getMetafieldHubSpotPropertyName", () => {
     );
   });
 
-  it("uses the legacy override name for the 3 pre-existing metafields", () => {
-    expect(getMetafieldHubSpotPropertyName("custom", "category")).toBe("shopify_category_metafield");
-    expect(getMetafieldHubSpotPropertyName("custom", "technical_family")).toBe("shopify_technical_family");
-    expect(getMetafieldHubSpotPropertyName("custom", "collection")).toBe("shopify_collection");
+  it("writes the 4 metafields into the dropdowns that already existed in HubSpot, not the shopify_* copies", () => {
+    expect(getMetafieldHubSpotPropertyName("custom", "category")).toBe("category");
+    expect(getMetafieldHubSpotPropertyName("custom", "technical_family")).toBe("family");
+    expect(getMetafieldHubSpotPropertyName("custom", "collection")).toBe("collection");
+    expect(getMetafieldHubSpotPropertyName("custom", "retail_eligible")).toBe("kind");
+  });
+});
+
+describe("isMetafieldDerivedProperty (decides what gets cleared when a metafield is empty)", () => {
+  it("never clears the pre-existing dropdowns, so HubSpot-only values survive", () => {
+    for (const name of ["category", "collection", "family", "kind"]) expect(isMetafieldDerivedProperty(name)).toBe(false);
+  });
+
+  it("never clears the middleware's retired duplicates either", () => {
+    for (const name of ["shopify_category_metafield", "shopify_collection", "shopify_technical_family", "shopify_metafield_technical_family", "shopify_mf_retail_eligible"]) {
+      expect(isMetafieldDerivedProperty(name)).toBe(false);
+    }
+  });
+
+  it("still clears the middleware's other metafield properties", () => {
+    expect(isMetafieldDerivedProperty("shopify_mf_subtitle")).toBe(true);
+  });
+});
+
+describe("fitExistingDropdownValues", () => {
+  const options = new Map([
+    ["collection", new Map([["color keep", "Color Keep"], ["charcolite", "Charcolite"]])],
+    ["kind", new Map([["yes", "Yes"], ["no", "No"]])],
+  ]);
+
+  it("rewrites a value to the exact dropdown option, ignoring case and spaces", () => {
+    const result = fitExistingDropdownValues({ name: "Tube", collection: " COLOR KEEP ", kind: "yes" }, options);
+    expect(result.properties).toEqual({ name: "Tube", collection: "Color Keep", kind: "Yes" });
+    expect(result.unmatched).toEqual([]);
+  });
+
+  it("drops a value that matches no option instead of failing the product, and reports it", () => {
+    const result = fitExistingDropdownValues({ name: "Tube", collection: "Aurora" }, options);
+    expect(result.properties).toEqual({ name: "Tube" });
+    expect(result.unmatched).toEqual([{ propertyName: "collection", value: "Aurora" }]);
+  });
+
+  it("leaves properties untouched when none of the dropdowns are being written", () => {
+    expect(fitExistingDropdownValues({ name: "Tube" }, options)).toEqual({ properties: { name: "Tube" }, unmatched: [] });
   });
 });
 

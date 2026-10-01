@@ -108,10 +108,33 @@ describe("mapWebhookProductVariantToHubSpot", () => {
     const result = mapWebhookProductVariantToHubSpot(
       payload,
       payload.variants[0],
-      new Set(["shopify_product_category", "shopify_technical_family"]),
+      new Set(["shopify_product_category", "family"]),
     );
 
     expect(result.properties.shopify_product_category).toBeUndefined();
-    expect(result.properties.shopify_technical_family).toBeUndefined();
+    expect(result.properties.family).toBeUndefined();
+  });
+});
+
+describe("mapWebhookProductVariantToHubSpot - pre-existing HubSpot dropdowns", () => {
+  const existing = new Set(["name", "kind", "collection", "shopify_mf_retail_eligible", "shopify_mf_subtitle"]);
+
+  it("writes Retail Eligible into the existing kind field when Shopify has a value", () => {
+    const payload = buildPayload();
+    const metafields = [{ namespace: "custom", key: "retail_eligible", type: "single_line_text_field", value: "Yes" }];
+    const result = mapWebhookProductVariantToHubSpot(payload, payload.variants[0], existing, { category: null, metafields });
+
+    expect(result.properties.kind).toBe("Yes");
+    expect(result.properties).not.toHaveProperty("shopify_mf_retail_eligible");
+  });
+
+  it("does not clear kind, collection or the old duplicate when the metafields are empty in Shopify", () => {
+    const payload = buildPayload();
+    const result = mapWebhookProductVariantToHubSpot(payload, payload.variants[0], existing, { category: null, metafields: [] });
+
+    expect(result.properties).not.toHaveProperty("kind");
+    expect(result.properties).not.toHaveProperty("collection");
+    expect(result.properties).not.toHaveProperty("shopify_mf_retail_eligible");
+    expect(result.properties.shopify_mf_subtitle).toBe("");
   });
 });
