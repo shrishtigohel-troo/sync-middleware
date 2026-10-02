@@ -31,6 +31,11 @@ export function mapShopifyVariantToHubSpot(product, variant, existingHubSpotProp
     // product ("Difiaba Professional") to be exactly what's used as brand,
     // no separate metafield needed.
     shopify_brand: product.vendor ?? undefined,
+    // Shopify's "Type" (Product organization > Type, e.g. "bundle"). Not
+    // HubSpot's built-in "Product type" (hs_product_type), which only accepts
+    // inventory / non_inventory / service and means something else. An empty
+    // string clears the HubSpot value when Type is removed in Shopify.
+    shopify_product_type: product.productType ?? undefined,
     // Shopify's own built-in/standardized Category taxonomy (not a custom
     // metafield) - confirmed live to show a real structured value (e.g.
     // "Hair Coloring Accessories in Hair Care").

@@ -82,6 +82,8 @@ export const HUBSPOT_PROPERTY_REGISTRY = [
   { objectType: "products", internalName: "shopify_product_category", label: "Product Category", middlewareOwned: true, confirmed: false },
   // Native Vendor field, confirmed live to be the brand name.
   { objectType: "products", internalName: "shopify_brand", label: "Brand", middlewareOwned: true, confirmed: false },
+  // Shopify's product "Type" - labelled "Type" to match Shopify. Distinct from HubSpot's built-in "Product type".
+  { objectType: "products", internalName: "shopify_product_type", label: "Type", middlewareOwned: true, confirmed: false },
   // A separate custom metafield also named "Category" (distinct from the built-in one above) - see src/config/productMetafields.js.
   { objectType: "products", internalName: "shopify_category_metafield", label: "Category (metafield)", middlewareOwned: true, confirmed: false },
   { objectType: "products", internalName: "shopify_technical_family", label: "Technical Family", middlewareOwned: true, confirmed: false },

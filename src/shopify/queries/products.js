@@ -8,6 +8,7 @@ const PRODUCT_FIELDS = /* GraphQL */ `
   status
   onlineStoreUrl
   vendor
+  productType
   category {
     fullName
   }

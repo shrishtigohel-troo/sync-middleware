@@ -33,6 +33,8 @@ export function mapWebhookProductVariantToHubSpot(payload, variant, existingHubS
     shopify_variant_id: toShopifyGid("ProductVariant", variant.id),
     // Brand: the REST webhook payload includes vendor directly, no extra lookup needed.
     shopify_brand: payload.vendor ?? undefined,
+    // Shopify's "Type" - see src/mappings/product.js for why this is not hs_product_type.
+    shopify_product_type: payload.product_type ?? undefined,
     shopify_product_category: categoryAndMetafields?.category?.fullName ?? undefined,
     // Native product Tags (present directly on the REST webhook payload) and
     // Collections (fetched via getProductCategoryAndMetafields, since the

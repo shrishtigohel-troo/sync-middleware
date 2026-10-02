@@ -138,3 +138,19 @@ describe("mapWebhookProductVariantToHubSpot - pre-existing HubSpot dropdowns", (
     expect(result.properties.shopify_mf_subtitle).toBe("");
   });
 });
+
+describe("mapWebhookProductVariantToHubSpot - Shopify product Type", () => {
+  const existing = new Set(["shopify_product_type", "hs_product_type"]);
+
+  it("writes Shopify's Type into shopify_product_type, never into HubSpot's built-in hs_product_type", () => {
+    const payload = buildPayload({ product_type: "bundle" });
+    const result = mapWebhookProductVariantToHubSpot(payload, payload.variants[0], existing);
+    expect(result.properties.shopify_product_type).toBe("bundle");
+    expect(result.properties).not.toHaveProperty("hs_product_type");
+  });
+
+  it("clears the HubSpot value when Type is removed in Shopify", () => {
+    const payload = buildPayload({ product_type: "" });
+    expect(mapWebhookProductVariantToHubSpot(payload, payload.variants[0], existing).properties.shopify_product_type).toBe("");
+  });
+});
