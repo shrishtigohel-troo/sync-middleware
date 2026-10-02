@@ -74,7 +74,13 @@ export async function listAssociationLabels(fromObjectType, toObjectType) {
  */
 export async function getDefaultAssociationType(fromObjectType, toObjectType) {
   const labels = await listAssociationLabels(fromObjectType, toObjectType);
-  const defaultLabel = labels.find((l) => l.category === "HUBSPOT_DEFINED");
+  // Must be the UNLABELED type. HubSpot also lists labeled HUBSPOT_DEFINED
+  // types ("Primary", "Billing Company", "Contact with Primary Company"),
+  // often first - taking the first one gave every middleware link a label
+  // the native integration never sets, and "Contact with Primary Company"
+  // kept moving a contact's primary company between location records
+  // (confirmed live on #3825 / Test Single Location Co).
+  const defaultLabel = labels.find((l) => l.category === "HUBSPOT_DEFINED" && !l.label);
   if (!defaultLabel) return undefined;
   return { associationCategory: "HUBSPOT_DEFINED", associationTypeId: defaultLabel.typeId };
 }
