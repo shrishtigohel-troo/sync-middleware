@@ -553,9 +553,20 @@ export async function handleOrderWebhook(payload, store) {
     if (existingCompanyProperties.has("shopify_location_id") && orderToCompanyAssociation) {
       const shopify = getShopifyClient(store);
       const purchasing = await getOrderPurchasingCompany(shopify, toShopifyGid("Order", payload.id));
-      const hubspotCompanyId = purchasing?.locationId
+      let hubspotCompanyId = purchasing?.locationId
         ? await findCompanyRecordForLocation(purchasing, existingCompanyProperties)
         : undefined;
+      // The location has no HubSpot record yet (e.g. its company_locations
+      // webhook was missed - confirmed live on order #3821, placed under a
+      // second location that never synced). Sync the whole company from
+      // Shopify the same way companies/update does, then look again.
+      if (!hubspotCompanyId && purchasing?.locationId && purchasing.companyId) {
+        logger.info({ shopifyOrderId: payload.id, ...purchasing }, "Order's company location has no HubSpot record - syncing the company first");
+        await recordLock.withLock(`company:${store.storeId}:${extractShopifyNumericId(purchasing.companyId)}`, () =>
+          handleCompanyWebhook({ admin_graphql_api_id: purchasing.companyId }, store),
+        );
+        hubspotCompanyId = await findCompanyRecordForLocation(purchasing, existingCompanyProperties);
+      }
       if (hubspotCompanyId) {
         await associateRecords("orders", hubspotOrderId, "companies", hubspotCompanyId, [orderToCompanyAssociation]);
       } else if (purchasing?.locationId) {
