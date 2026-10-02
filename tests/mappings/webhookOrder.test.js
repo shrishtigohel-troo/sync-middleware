@@ -213,3 +213,54 @@ describe("mapWebhookOrderToHubSpot - Shipped vs Delivered stage", () => {
     ).toBe(delivered);
   });
 });
+
+describe("mapWebhookOrderToHubSpot - cancellation, closing and checkout fields", () => {
+  const all = new Set([
+    "hs_external_canceled_date", "hs_cancellation_reason", "hs_closed_date", "hs_refund_amount",
+    "hs_external_checkout_id", "hs_buyer_accepts_marketing", "hs_external_modified_date", "hs_landing_site",
+  ]);
+  const map = (overrides) => mapWebhookOrderToHubSpot(buildPayload(overrides), b2bStore, all).properties;
+
+  it("fills the cancellation fields like the native integration (#3825)", () => {
+    const p = map({
+      cancelled_at: "2026-10-02T07:25:28-04:00",
+      cancel_reason: "customer",
+      closed_at: "2026-10-02T07:25:27-04:00",
+      checkout_id: 46786843705561,
+      buyer_accepts_marketing: false,
+      updated_at: "2026-10-02T07:25:28-04:00",
+      refunds: [{ transactions: [] }],
+    });
+    expect(p).toMatchObject({
+      hs_external_canceled_date: "2026-10-02T07:25:28-04:00",
+      hs_cancellation_reason: "Customer changed/cancelled order",
+      hs_external_checkout_id: "46786843705561",
+      hs_buyer_accepts_marketing: "false",
+      hs_external_modified_date: "2026-10-02T07:25:28-04:00",
+      hs_refund_amount: "0",
+    });
+  });
+
+  it("never writes Closed Date (read-only for apps), and no cancellation fields on an open order (#3826)", () => {
+    const p = map({ closed_at: "2026-10-02T07:25:27-04:00", cancelled_at: null, landing_site: "/customer_authentication/redirect?locale=en-US", buyer_accepts_marketing: true });
+    expect(p).not.toHaveProperty("hs_closed_date");
+    expect(p).not.toHaveProperty("hs_external_canceled_date");
+    expect(p).not.toHaveProperty("hs_cancellation_reason");
+    expect(p.hs_landing_site).toBe("/customer_authentication/redirect?locale=en-US");
+    expect(p.hs_buyer_accepts_marketing).toBe("true");
+  });
+
+  it("adds up only successful refund transactions", () => {
+    const p = map({
+      refunds: [
+        { transactions: [{ kind: "refund", status: "success", amount: "10.00" }, { kind: "refund", status: "failure", amount: "99.00" }] },
+        { transactions: [{ kind: "refund", status: "success", amount: "5.50" }] },
+      ],
+    });
+    expect(p.hs_refund_amount).toBe("15.50");
+  });
+
+  it("keeps an unknown Shopify cancel reason as-is", () => {
+    expect(map({ cancelled_at: "2026-10-02T07:25:28-04:00", cancel_reason: "something_new" }).hs_cancellation_reason).toBe("something_new");
+  });
+});

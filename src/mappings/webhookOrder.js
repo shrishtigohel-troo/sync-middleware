@@ -12,6 +12,25 @@ function toStatusLabel(value) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// Shopify's cancel_reason codes, in the wording Shopify's admin shows (and
+// HubSpot's native integration writes), e.g. "Customer changed/cancelled order".
+const CANCEL_REASON_LABELS = {
+  customer: "Customer changed/cancelled order",
+  inventory: "Items unavailable",
+  fraud: "Fraudulent order",
+  declined: "Payment declined",
+  staff: "Staff error",
+  other: "Other",
+};
+
+// Successful refund transactions across all of the order's refunds.
+function sumRefunds(refunds) {
+  const amounts = (refunds ?? []).flatMap((refund) =>
+    (refund.transactions ?? []).filter((t) => t.kind === "refund" && t.status === "success").map((t) => t.amount),
+  );
+  return sumAmounts(amounts) ?? "0";
+}
+
 function sumAmounts(values) {
   const amounts = values.map(Number).filter((n) => !Number.isNaN(n));
   return amounts.length ? amounts.reduce((a, b) => a + b, 0).toFixed(2) : undefined;
@@ -106,6 +125,22 @@ export function mapWebhookOrderToHubSpot(payload, store, existingHubSpotProperti
     hs_tags: payload.tags || undefined,
     hs_external_created_date: payload.created_at ?? undefined,
     hs_processed_date: payload.processed_at ?? undefined,
+    hs_external_modified_date: payload.updated_at ?? undefined,
+    // hs_closed_date is NOT written: HubSpot rejects it as read-only for any
+    // app but its native Shopify integration (confirmed live), and sets it
+    // itself when the stage is Processed/Shipped/Delivered (closed stages
+    // in the Order pipeline). hs_is_closed is calculated from it.
+    // hs_is_canceled is calculated by HubSpot from this date.
+    hs_external_canceled_date: payload.cancelled_at ?? undefined,
+    hs_cancellation_reason: payload.cancel_reason
+      ? (CANCEL_REASON_LABELS[payload.cancel_reason] ?? payload.cancel_reason)
+      : undefined,
+    hs_refund_amount: sumRefunds(payload.refunds),
+    hs_external_checkout_id: payload.checkout_id != null ? String(payload.checkout_id) : undefined,
+    hs_buyer_accepts_marketing:
+      typeof payload.buyer_accepts_marketing === "boolean" ? String(payload.buyer_accepts_marketing) : undefined,
+    // First page the customer landed on, e.g. "/?ambassador=trevor002b".
+    hs_landing_site: payload.landing_site || undefined,
     ...mapAddress("hs_shipping_address", payload.shipping_address),
     ...mapAddress("hs_billing_address", payload.billing_address),
     // HubSpot's own native reference fields - see src/mappings/order.js for why.
