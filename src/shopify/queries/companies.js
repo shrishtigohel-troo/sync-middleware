@@ -121,3 +121,43 @@ export async function getCompanyLocationNames(client, companyGid) {
   const data = await client.request(GET_COMPANY_LOCATIONS_QUERY, { id: companyGid });
   return data.company?.locations.edges.map((e) => e.node.name) ?? [];
 }
+
+const GET_COMPANY_LOCATION_CONTACTS_QUERY = /* GraphQL */ `
+  query GetCompanyLocationContacts($id: ID!) {
+    company(id: $id) {
+      locations(first: 10) {
+        edges {
+          node {
+            id
+            roleAssignments(first: 50) {
+              edges {
+                node {
+                  companyContact {
+                    id
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * Which company contacts are assigned to which location, as Shopify shows
+ * under each location's Customers list:
+ * Map<companyLocationGid, Set<companyContactGid>>. A separate query rather
+ * than part of COMPANY_FIELDS, since nesting it there pushes the paginated
+ * companies query over Shopify's per-query cost limit.
+ */
+export async function getCompanyLocationContactIds(client, companyGid) {
+  const data = await client.request(GET_COMPANY_LOCATION_CONTACTS_QUERY, { id: companyGid });
+  return new Map(
+    (data.company?.locations.edges ?? []).map(({ node }) => [
+      node.id,
+      new Set(node.roleAssignments.edges.map((e) => e.node.companyContact.id)),
+    ]),
+  );
+}

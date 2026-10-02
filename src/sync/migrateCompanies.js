@@ -1,4 +1,4 @@
-import { iterateAllCompanies } from "../shopify/queries/companies.js";
+import { iterateAllCompanies, getCompanyLocationContactIds } from "../shopify/queries/companies.js";
 import { getExistingPropertyNames } from "../hubspot/properties.js";
 import { HubSpotObjectApi } from "../hubspot/objects.js";
 import { mapCompanyLocationToHubSpot } from "../mappings/companyLocation.js";
@@ -61,6 +61,8 @@ export async function migrateCompanies(shopify, store) {
       continue;
     }
 
+    const locationContactIds = company.contacts.edges.length > 0 ? await getCompanyLocationContactIds(shopify, company.id) : new Map();
+
     for (const { node: location } of company.locations.edges) {
       summary.locationsProcessed += 1;
 
@@ -111,7 +113,10 @@ export async function migrateCompanies(shopify, store) {
         );
 
         if (company.contacts.edges.length > 0) {
-          const contactResult = await associateCompanyContacts(company, hubspotCompanyId, existingContactProperties);
+          const contactResult = await associateCompanyContacts(company, hubspotCompanyId, existingContactProperties, {
+            locationGid: location.id,
+            locationContactIds,
+          });
           summary.contactsAssociated += contactResult.associated;
           summary.mainContactsFlagged += contactResult.mainContactFlagged;
           summary.contactsSkippedNoMatch += contactResult.skippedNoMatch;

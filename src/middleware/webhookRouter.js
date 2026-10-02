@@ -6,7 +6,7 @@ import { shopifyStores, getStoreConfig } from "../config/stores.js";
 import { getShopifyClient } from "../shopify/client.js";
 import { getOrderPurchasingCompany } from "../shopify/queries/orders.js";
 import { getProductCategoryAndMetafields } from "../shopify/queries/products.js";
-import { getCompanyById } from "../shopify/queries/companies.js";
+import { getCompanyById, getCompanyLocationContactIds } from "../shopify/queries/companies.js";
 import { getExistingPropertyNames, listObjectProperties } from "../hubspot/properties.js";
 import { HubSpotObjectApi } from "../hubspot/objects.js";
 import { associateRecords, getDefaultAssociationType, listAssociatedObjectIds } from "../hubspot/associations.js";
@@ -271,6 +271,7 @@ async function upsertHubSpotCompanyLocation(shopifyLocationGid, properties, exis
   recentlyUpsertedLocationRecordIds.set(shopifyLocationGid, existingId);
 
   logger.info({ shopifyLocationGid, operation }, "Company Location webhook processed successfully");
+  return existingId;
 }
 
 async function handleCompanyWebhook(payload, store) {
@@ -288,6 +289,9 @@ async function handleCompanyWebhook(payload, store) {
     return;
   }
 
+  const existingContactProperties = await getExistingPropertyNames("contacts");
+  const locationContactIds = await getCompanyLocationContactIds(shopify, company.id);
+
   for (const { node: location } of company.locations.edges) {
     const { properties } = mapCompanyLocationToHubSpot(
       {
@@ -300,7 +304,16 @@ async function handleCompanyWebhook(payload, store) {
       store,
       existingProperties,
     );
-    await upsertHubSpotCompanyLocation(location.id, properties, existingProperties);
+    const hubspotCompanyId = await upsertHubSpotCompanyLocation(location.id, properties, existingProperties);
+    // Link this location's contacts too, so a location record created here
+    // (e.g. for an order placed under a location that never synced) is
+    // complete straight away instead of waiting for a company_contacts webhook.
+    if (hubspotCompanyId) {
+      await associateCompanyContacts(company, hubspotCompanyId, existingContactProperties, {
+        locationGid: location.id,
+        locationContactIds,
+      });
+    }
   }
 }
 
@@ -345,9 +358,9 @@ async function handleCompanyLocationWebhook(payload, store) {
  * shape of the company_contacts payload (unconfirmed, and this topic's
  * payload may not include a resolvable customer email directly), this
  * re-fetches the full company's current contact list via GraphQL (same
- * query used by the migration script) and re-associates ALL of that
- * company's contacts to EVERY one of its HubSpot location-records - a
- * contact isn't tied to one specific location in our data model, see
+ * query used by the migration script) and re-links its contacts to each of
+ * its HubSpot location records - each location record gets only the
+ * contacts Shopify assigns to that location, see
  * src/sync/associateCompanyContacts.js.
  */
 async function handleCompanyContactWebhook(payload, store) {
@@ -373,21 +386,32 @@ async function handleCompanyContactWebhook(payload, store) {
   }
 
   const existingContactProperties = await getExistingPropertyNames("contacts");
+  const locationContactIds = await getCompanyLocationContactIds(shopify, companyGid);
   const companiesApi = new HubSpotObjectApi("companies");
   const locationRecords = await companiesApi.searchByFilters(
     [{ propertyName: "shopify_company_id", operator: "EQ", value: companyGid }],
-    undefined,
+    ["shopify_location_id"],
     50,
   );
 
+  // Each location record gets only the contacts Shopify assigns to that
+  // location - see src/sync/associateCompanyContacts.js.
   let contactsAssociated = 0;
+  let contactsRemoved = 0;
   for (const record of locationRecords.results) {
-    const result = await associateCompanyContacts(company, record.id, existingContactProperties);
+    const locationGid = record.properties?.shopify_location_id;
+    const result = await associateCompanyContacts(
+      company,
+      record.id,
+      existingContactProperties,
+      locationGid ? { locationGid, locationContactIds } : {},
+    );
     contactsAssociated += result.associated;
+    contactsRemoved += result.removed;
   }
 
   logger.info(
-    { shopifyCompanyId: companyGid, locationRecordsUpdated: locationRecords.results.length, contactsAssociated },
+    { shopifyCompanyId: companyGid, locationRecordsUpdated: locationRecords.results.length, contactsAssociated, contactsRemoved },
     "Company Contact webhook processed successfully",
   );
 }

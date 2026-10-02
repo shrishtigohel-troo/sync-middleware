@@ -27,6 +27,12 @@ export async function associateRecords(fromObjectType, fromObjectId, toObjectTyp
   );
 }
 
+/** Removes every association between two records (all labels/types). */
+export async function removeAssociation(fromObjectType, fromObjectId, toObjectType, toObjectId) {
+  const client = getHubSpotClient();
+  await client.request("DELETE", `/crm/v4/objects/${fromObjectType}/${fromObjectId}/associations/${toObjectType}/${toObjectId}`);
+}
+
 /**
  * Lists the ids of every record of `toObjectType` associated with one
  * record. Unlike the CRM Search API this is strongly consistent, so a

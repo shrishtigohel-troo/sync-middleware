@@ -1,5 +1,5 @@
 import { HubSpotObjectApi } from "../hubspot/objects.js";
-import { associateRecords, getDefaultAssociationType } from "../hubspot/associations.js";
+import { associateRecords, getDefaultAssociationType, listAssociatedObjectIds, removeAssociation } from "../hubspot/associations.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -20,9 +20,28 @@ import { logger } from "../utils/logger.js";
  * contact's email (see docs/object-matching-rules.md) - the Shopify company
  * query already requests it, so this only runs once that's available.
  *
- * Returns { associated, mainContactFlagged, skippedNoMatch }
+ * Per location: pass `locationGid` and `locationContactIds` (from
+ * getCompanyLocationContactIds) and only the contacts Shopify assigns to
+ * that location are linked to its HubSpot record - each location record
+ * otherwise showed every contact of the company (confirmed live: Streetcar
+ * Ct showed all 3 contacts of "Test Single Location Co", Shopify assigns it
+ * only one). Contacts of this company that are not assigned to the location
+ * are unlinked from it. A contact assigned to no location at all stays
+ * linked to every location record. Contacts that are not contacts of this
+ * Shopify company (e.g. linked by hand in HubSpot) are never touched.
+ * Without `locationGid`, every company contact is linked (older callers).
+ *
+ * Returns { associated, removed, mainContactFlagged, skippedNoMatch }
  */
-export async function associateCompanyContacts(company, hubspotCompanyId, existingContactProperties) {
+export async function associateCompanyContacts(company, hubspotCompanyId, existingContactProperties, options = {}) {
+  const { locationGid, locationContactIds } = options;
+  const assignedHere = locationGid ? (locationContactIds?.get(locationGid) ?? new Set()) : null;
+  const assignedAnywhere = new Set([...(locationContactIds?.values() ?? [])].flatMap((ids) => [...ids]));
+  const belongsHere = (contact) => !assignedHere || assignedHere.has(contact.id) || !assignedAnywhere.has(contact.id);
+  const currentlyLinked = assignedHere
+    ? new Set(await listAssociatedObjectIds("companies", hubspotCompanyId, "contacts"))
+    : new Set();
+  let removed = 0;
   const contactsApi = new HubSpotObjectApi("contacts");
   const companyToContactAssociation = await getDefaultAssociationType("companies", "contacts");
 
@@ -30,7 +49,7 @@ export async function associateCompanyContacts(company, hubspotCompanyId, existi
     logger.warn(
       "No default HubSpot association type found between companies and contacts - contact associations skipped for this company.",
     );
-    return { associated: 0, mainContactFlagged: 0, skippedNoMatch: 0 };
+    return { associated: 0, removed: 0, mainContactFlagged: 0, skippedNoMatch: 0 };
   }
 
   let associated = 0;
@@ -62,6 +81,18 @@ export async function associateCompanyContacts(company, hubspotCompanyId, existi
       continue;
     }
 
+    if (!belongsHere(contact)) {
+      if (currentlyLinked.has(String(hubspotContactId))) {
+        await removeAssociation("companies", hubspotCompanyId, "contacts", hubspotContactId);
+        removed += 1;
+        logger.info(
+          { hubspotCompanyId, hubspotContactId, shopifyLocationId: locationGid },
+          "Contact is not assigned to this company location in Shopify - unlinked from its HubSpot record",
+        );
+      }
+      continue;
+    }
+
     await associateRecords("companies", hubspotCompanyId, "contacts", hubspotContactId, [companyToContactAssociation]);
     associated += 1;
 
@@ -71,5 +102,5 @@ export async function associateCompanyContacts(company, hubspotCompanyId, existi
     }
   }
 
-  return { associated, mainContactFlagged, skippedNoMatch };
+  return { associated, removed, mainContactFlagged, skippedNoMatch };
 }
