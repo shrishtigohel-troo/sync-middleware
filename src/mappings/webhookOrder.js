@@ -1,5 +1,5 @@
 import { isSupportedCurrency } from "../config/currencies.js";
-import { MARKET_BY_STORE } from "../config/stores.js";
+import { MARKET_BY_STORE, orderKey } from "../config/stores.js";
 import { ORDER_PIPELINE_ID, getOrderPipelineStageId } from "../config/orderPipeline.js";
 import { logger } from "../utils/logger.js";
 import { toShopifyGid } from "../utils/shopifyGid.js";
@@ -86,6 +86,7 @@ export function mapWebhookOrderToHubSpot(payload, store, existingHubSpotProperti
     shopify_store_id: store.storeId,
     // gid:// form to match what the GraphQL-based sync paths write - see src/utils/shopifyGid.js.
     shopify_order_id: toShopifyGid("Order", payload.id),
+    shopify_order_key: orderKey(store, toShopifyGid("Order", payload.id)),
     shopify_original_currency: currencyCode,
     shopify_channel: store.channel,
     shopify_market: MARKET_BY_STORE[store.storeId] ?? undefined,

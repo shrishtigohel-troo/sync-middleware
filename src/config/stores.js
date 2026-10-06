@@ -70,3 +70,15 @@ export const MARKET_BY_STORE = {
   b2b: "United States",
   b2c: null,
 };
+
+/**
+ * Unique key for one Shopify order in HubSpot: "<storeId>:<order gid>",
+ * written to the unique-value property shopify_order_key. HubSpot refuses a
+ * second record with the same key, so two webhooks for one order processed
+ * at the same moment (separate Vercel instances share no memory) cannot
+ * create two HubSpot Orders - confirmed live on #3830, created twice 4
+ * seconds apart before this key existed.
+ */
+export function orderKey(store, shopifyOrderGid) {
+  return `${store.storeId}:${shopifyOrderGid}`;
+}

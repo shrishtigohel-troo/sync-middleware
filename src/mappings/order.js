@@ -1,5 +1,5 @@
 import { isSupportedCurrency } from "../config/currencies.js";
-import { MARKET_BY_STORE } from "../config/stores.js";
+import { MARKET_BY_STORE, orderKey } from "../config/stores.js";
 import { ORDER_PIPELINE_ID, getOrderPipelineStageId } from "../config/orderPipeline.js";
 import { extractShopifyNumericId } from "../utils/shopifyGid.js";
 import { logger } from "../utils/logger.js";
@@ -29,6 +29,7 @@ export function mapShopifyOrderToHubSpot(order, store, existingHubSpotProperties
   const desired = {
     shopify_store_id: store.storeId,
     shopify_order_id: order.id,
+    shopify_order_key: orderKey(store, order.id),
     shopify_original_currency: currencyCode,
     shopify_channel: store.channel,
     shopify_market: MARKET_BY_STORE[store.storeId] ?? undefined,

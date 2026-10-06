@@ -21,6 +21,8 @@ import { mapWebhookCustomerToHubSpot } from "../mappings/webhookCustomer.js";
 import { mapCompanyLocationToHubSpot } from "../mappings/companyLocation.js";
 import { mapWebhookOrderToHubSpot, mapWebhookLineItemToHubSpot } from "../mappings/webhookOrder.js";
 import { toShopifyGid, extractShopifyNumericId } from "../utils/shopifyGid.js";
+import { orderKey } from "../config/stores.js";
+import { HubSpotApiError } from "../hubspot/client.js";
 import { findExistingOrderId } from "../sync/findExistingOrder.js";
 import { findExistingProductId } from "../sync/findExistingProduct.js";
 import { findExistingLineItemId } from "../sync/findExistingLineItem.js";
@@ -504,6 +506,38 @@ export async function removeDuplicateLineItems(lineItemsApi, hubspotOrderId) {
  * (getOrderPurchasingCompany) to fetch it directly from Shopify rather
  * than guessing at an unconfirmed webhook field name.
  */
+/**
+ * True when HubSpot rejected a write because another record already holds
+ * this value of a unique-value property (it answers 400 "Cannot set
+ * PropertyValueCoordinates{... propertyName=<name> ...}" - confirmed live).
+ */
+export function isUniqueValueConflict(error, propertyName) {
+  if (!(error instanceof HubSpotApiError) || (error.status !== 400 && error.status !== 409)) return false;
+  const text = `${error.message} ${JSON.stringify(error.body ?? "")}`;
+  return text.includes(`propertyName=${propertyName}`) || (text.includes(propertyName) && /already has that value|Cannot set PropertyValueCoordinates/.test(text));
+}
+
+/**
+ * Updates existingId if given, otherwise creates the order. If HubSpot
+ * refuses the create because another webhook for the same order created it
+ * a moment ago (same shopify_order_key), that record is updated instead.
+ * Returns { id, operation }.
+ */
+export async function createOrUpdateOrder(ordersApi, existingId, properties, uniqueKey) {
+  if (existingId) return { id: (await ordersApi.update(existingId, properties)).id, operation: "update" };
+  try {
+    return { id: (await ordersApi.create(properties)).id, operation: "create" };
+  } catch (error) {
+    const winner =
+      uniqueKey && isUniqueValueConflict(error, "shopify_order_key")
+        ? await ordersApi.getByIdProperty("shopify_order_key", uniqueKey)
+        : null;
+    if (!winner) throw error;
+    logger.info({ shopifyOrderKey: uniqueKey, hubspotOrderId: winner.id }, "Order was created concurrently - updating it instead of creating a duplicate");
+    return { id: (await ordersApi.update(winner.id, properties)).id, operation: "update" };
+  }
+}
+
 export async function handleOrderWebhook(payload, store) {
   const [existingOrderProperties, existingLineItemProperties] = await Promise.all([
     getExistingPropertyNames("orders"),
@@ -526,7 +560,15 @@ export async function handleOrderWebhook(payload, store) {
   // native reference fields, so we converge with any record the native
   // Shopify integration already created instead of duplicating it - see
   // docs/object-matching-rules.md.
+  // The unique key is read directly (strongly consistent, no Search API lag)
+  // before falling back to search, which also finds records without a key
+  // yet (older ones, or the native integration's).
+  const uniqueKey = orderKey(store, toShopifyGid("Order", payload.id));
+  const hasUniqueKey = existingOrderProperties.has("shopify_order_key");
   let existingOrderId = recentlyUpsertedOrderIds.get(orderCacheKey);
+  if (!existingOrderId && hasUniqueKey) {
+    existingOrderId = (await ordersApi.getByIdProperty("shopify_order_key", uniqueKey))?.id;
+  }
   if (!existingOrderId) {
     existingOrderId = await findExistingOrderId(
       ordersApi,
@@ -536,17 +578,12 @@ export async function handleOrderWebhook(payload, store) {
     );
   }
 
-  let hubspotOrderId;
-  let orderOperation;
-  if (existingOrderId) {
-    const updated = await ordersApi.update(existingOrderId, orderProperties);
-    hubspotOrderId = updated.id;
-    orderOperation = "update";
-  } else {
-    const created = await ordersApi.create(orderProperties);
-    hubspotOrderId = created.id;
-    orderOperation = "create";
-  }
+  const { id: hubspotOrderId, operation: orderOperation } = await createOrUpdateOrder(
+    ordersApi,
+    existingOrderId,
+    orderProperties,
+    hasUniqueKey ? uniqueKey : undefined,
+  );
   recentlyUpsertedOrderIds.set(orderCacheKey, hubspotOrderId);
 
   const customerEmail = payload.email ?? payload.customer?.email;
