@@ -1,5 +1,5 @@
 import { isSupportedCurrency } from "../config/currencies.js";
-import { MARKET_BY_STORE, orderKey } from "../config/stores.js";
+import { resolveOrderMarket, orderKey } from "../config/stores.js";
 import { ORDER_PIPELINE_ID, getOrderPipelineStageId } from "../config/orderPipeline.js";
 import { logger } from "../utils/logger.js";
 import { toShopifyGid } from "../utils/shopifyGid.js";
@@ -23,7 +23,16 @@ const CANCEL_REASON_LABELS = {
   other: "Other",
 };
 
+// Amount in the currency the customer paid in (Shopify's "presentment"
+// money, e.g. EUR for an Italian order), falling back to the plain field,
+// which is in the store's currency (USD). For US orders both are identical.
+// Phase 2 / SOW: "the original Shopify currency and value will be retained".
+function customerMoney(moneySet, plainValue) {
+  return moneySet?.presentment_money?.amount ?? moneySet?.shop_money?.amount ?? plainValue ?? undefined;
+}
+
 // Successful refund transactions across all of the order's refunds.
+// Transaction amounts are already in the currency the customer paid in.
 function sumRefunds(refunds) {
   const amounts = (refunds ?? []).flatMap((refund) =>
     (refund.transactions ?? []).filter((t) => t.kind === "refund" && t.status === "success").map((t) => t.amount),
@@ -74,7 +83,10 @@ function mapAddress(prefix, address) {
  * Returns { properties, skippedMissingProperties }
  */
 export function mapWebhookOrderToHubSpot(payload, store, existingHubSpotProperties) {
-  const currencyCode = payload.currency;
+  // The customer's currency, not the store's: an Italian order is EUR even
+  // though the store's currency (payload.currency) is USD.
+  const currencyCode = payload.presentment_currency ?? payload.currency;
+  const address = payload.shipping_address ?? payload.billing_address;
   if (!isSupportedCurrency(currencyCode)) {
     logger.warn(
       { shopifyOrderId: payload.id, currencyCode },
@@ -89,10 +101,13 @@ export function mapWebhookOrderToHubSpot(payload, store, existingHubSpotProperti
     shopify_order_key: orderKey(store, toShopifyGid("Order", payload.id)),
     shopify_original_currency: currencyCode,
     shopify_channel: store.channel,
-    shopify_market: MARKET_BY_STORE[store.storeId] ?? undefined,
+    shopify_market: resolveOrderMarket(store, { countryCode: address?.country_code, countryName: address?.country }),
     hs_order_name: payload.name,
     hs_currency_code: currencyCode,
-    hs_total_price: payload.current_total_price ?? payload.total_price,
+    hs_total_price: customerMoney(
+      payload.current_total_price_set ?? payload.total_price_set,
+      payload.current_total_price ?? payload.total_price,
+    ),
     shopify_financial_status: payload.financial_status,
     shopify_fulfillment_status: payload.fulfillment_status ?? "unfulfilled",
     shopify_cancelled: payload.cancelled_at ? "true" : "false",
@@ -109,12 +124,18 @@ export function mapWebhookOrderToHubSpot(payload, store, existingHubSpotProperti
     // Native HubSpot Order fields behind the record's "Order total",
     // "Discount codes" and "Shipment details" cards - the same fields the
     // native Shopify integration fills (compared live against order #3653).
-    hs_subtotal_price: payload.current_subtotal_price ?? payload.subtotal_price,
-    hs_order_discount: payload.current_total_discounts ?? payload.total_discounts,
-    hs_tax: payload.current_total_tax ?? payload.total_tax,
+    hs_subtotal_price: customerMoney(
+      payload.current_subtotal_price_set ?? payload.subtotal_price_set,
+      payload.current_subtotal_price ?? payload.subtotal_price,
+    ),
+    hs_order_discount: customerMoney(
+      payload.current_total_discounts_set ?? payload.total_discounts_set,
+      payload.current_total_discounts ?? payload.total_discounts,
+    ),
+    hs_tax: customerMoney(payload.current_total_tax_set ?? payload.total_tax_set, payload.current_total_tax ?? payload.total_tax),
     hs_shipping_cost:
-      payload.total_shipping_price_set?.shop_money?.amount ??
-      sumAmounts((payload.shipping_lines ?? []).map((line) => line.price)),
+      customerMoney(payload.total_shipping_price_set) ??
+      sumAmounts((payload.shipping_lines ?? []).map((line) => customerMoney(line.price_set, line.price))),
     hs_discount_codes: joinNonEmpty((payload.discount_codes ?? []).map((d) => d.code)),
     hs_payment_status: toStatusLabel(payload.financial_status),
     hs_fulfillment_status: toStatusLabel(payload.fulfillment_status ?? "unfulfilled"),
@@ -177,24 +198,26 @@ export function mapWebhookOrderToHubSpot(payload, store, existingHubSpotProperti
  * REST-shaped counterpart to src/mappings/lineItem.js.
  */
 export function mapWebhookLineItemToHubSpot(lineItem, existingHubSpotProperties, currencyCode) {
-  const unitPrice = Number(lineItem.price);
+  // Prices in the customer's currency, matching the order's currency.
+  const unitPriceText = customerMoney(lineItem.price_set, lineItem.price);
+  const unitPrice = Number(unitPriceText);
   // discount_allocations carries every discount applied to this line,
   // including order-level codes spread across lines; total_discount is
   // Shopify's older field and is often "0.00" even when a code applied.
-  const allocated = sumAmounts((lineItem.discount_allocations ?? []).map((a) => a.amount));
-  const discount = Number(allocated ?? lineItem.total_discount ?? "0");
+  const allocated = sumAmounts((lineItem.discount_allocations ?? []).map((a) => customerMoney(a.amount_set, a.amount)));
+  const discount = Number(allocated ?? customerMoney(lineItem.total_discount_set, lineItem.total_discount) ?? "0");
   const amount = (unitPrice * lineItem.quantity - discount).toFixed(2);
 
   const desired = {
     name: lineItem.title,
     quantity: String(lineItem.quantity),
-    price: lineItem.price,
+    price: unitPriceText,
     amount,
     hs_sku: lineItem.sku ?? undefined,
     // Unit discount, as HubSpot's native integration writes it - the
     // Line items card shows "after $X discount" from this.
     discount: discount > 0 && lineItem.quantity ? (discount / lineItem.quantity).toFixed(2) : undefined,
-    tax: sumAmounts((lineItem.tax_lines ?? []).map((t) => t.price)),
+    tax: sumAmounts((lineItem.tax_lines ?? []).map((t) => customerMoney(t.price_set, t.price))),
     hs_line_item_currency_code: currencyCode,
     shopify_variant_id: lineItem.variant_id ? toShopifyGid("ProductVariant", lineItem.variant_id) : undefined,
     // Custom property used to make line item sync idempotent - see src/mappings/lineItem.js

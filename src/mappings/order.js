@@ -1,5 +1,5 @@
 import { isSupportedCurrency } from "../config/currencies.js";
-import { MARKET_BY_STORE, orderKey } from "../config/stores.js";
+import { resolveOrderMarket, orderKey } from "../config/stores.js";
 import { ORDER_PIPELINE_ID, getOrderPipelineStageId } from "../config/orderPipeline.js";
 import { extractShopifyNumericId } from "../utils/shopifyGid.js";
 import { logger } from "../utils/logger.js";
@@ -18,7 +18,11 @@ import { logger } from "../utils/logger.js";
  * Returns { properties, skippedMissingProperties }
  */
 export function mapShopifyOrderToHubSpot(order, store, existingHubSpotProperties) {
-  const currencyCode = order.currentTotalPriceSet.shopMoney.currencyCode;
+  // The customer's currency and amount (presentment money), falling back to
+  // the store's - identical for US orders. See src/mappings/webhookOrder.js.
+  const customerTotal = order.currentTotalPriceSet.presentmentMoney ?? order.currentTotalPriceSet.shopMoney;
+  const currencyCode = customerTotal.currencyCode;
+  const address = order.shippingAddress ?? order.billingAddress;
   if (!isSupportedCurrency(currencyCode)) {
     logger.warn(
       { shopifyOrderId: order.id, currencyCode },
@@ -32,11 +36,11 @@ export function mapShopifyOrderToHubSpot(order, store, existingHubSpotProperties
     shopify_order_key: orderKey(store, order.id),
     shopify_original_currency: currencyCode,
     shopify_channel: store.channel,
-    shopify_market: MARKET_BY_STORE[store.storeId] ?? undefined,
+    shopify_market: resolveOrderMarket(store, { countryCode: address?.countryCodeV2, countryName: address?.country }),
     // Candidate native HubSpot Order properties - only written if confirmed to exist.
     hs_order_name: order.name,
     hs_currency_code: currencyCode,
-    hs_total_price: order.currentTotalPriceSet.shopMoney.amount,
+    hs_total_price: customerTotal.amount,
     // Order status - a cancelled order is still synced (never dropped), just flagged.
     shopify_financial_status: order.displayFinancialStatus,
     shopify_fulfillment_status: order.displayFulfillmentStatus,

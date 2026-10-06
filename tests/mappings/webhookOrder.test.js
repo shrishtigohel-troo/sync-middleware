@@ -264,3 +264,70 @@ describe("mapWebhookOrderToHubSpot - cancellation, closing and checkout fields",
     expect(map({ cancelled_at: "2026-10-02T07:25:28-04:00", cancel_reason: "something_new" }).hs_cancellation_reason).toBe("something_new");
   });
 });
+
+describe("mapWebhookOrderToHubSpot - Phase 2: customer's currency and market", () => {
+  const all = new Set([
+    "hs_currency_code", "shopify_original_currency", "hs_total_price", "hs_subtotal_price",
+    "hs_order_discount", "hs_tax", "hs_shipping_cost", "shopify_market",
+  ]);
+  const money = (shop, presentment, presentmentCurrency) => ({
+    shop_money: { amount: shop, currency_code: "USD" },
+    presentment_money: { amount: presentment, currency_code: presentmentCurrency },
+  });
+
+  it("keeps an Italian order in EUR with the amounts the customer paid (#3433)", () => {
+    const p = mapWebhookOrderToHubSpot(
+      buildPayload({
+        currency: "USD",
+        presentment_currency: "EUR",
+        current_total_price: "73.62",
+        current_total_price_set: money("73.62", "63.60", "EUR"),
+        current_subtotal_price_set: money("73.62", "63.60", "EUR"),
+        current_total_discounts_set: money("0.00", "0.00", "EUR"),
+        current_total_tax_set: money("0.00", "0.00", "EUR"),
+        total_shipping_price_set: money("0.00", "0.00", "EUR"),
+        shipping_address: { country: "Italy", country_code: "IT" },
+      }),
+      b2bStore,
+      all,
+    ).properties;
+    expect(p).toMatchObject({
+      hs_currency_code: "EUR",
+      shopify_original_currency: "EUR",
+      hs_total_price: "63.60",
+      hs_subtotal_price: "63.60",
+      shopify_market: "Italy",
+    });
+  });
+
+  it("leaves a US order exactly as before (USD, same amounts, United States)", () => {
+    const p = mapWebhookOrderToHubSpot(
+      buildPayload({
+        currency: "USD",
+        presentment_currency: "USD",
+        current_total_price: "39.98",
+        current_total_price_set: money("39.98", "39.98", "USD"),
+        shipping_address: { country: "United States", country_code: "US" },
+      }),
+      b2bStore,
+      all,
+    ).properties;
+    expect(p).toMatchObject({ hs_currency_code: "USD", hs_total_price: "39.98", shopify_market: "United States" });
+  });
+
+  it("uses the billing country when there is no shipping address, and United States when there is no address", () => {
+    expect(mapWebhookOrderToHubSpot(buildPayload({ billing_address: { country: "Mexico", country_code: "MX" } }), b2bStore, all).properties.shopify_market).toBe("Mexico");
+    expect(mapWebhookOrderToHubSpot(buildPayload({}), b2bStore, all).properties.shopify_market).toBe("United States");
+  });
+
+  it("prices line items in the customer's currency", () => {
+    const lineItem = {
+      id: 1, title: "Toner", quantity: 2, price: "11.50",
+      price_set: money("11.50", "10.00", "EUR"),
+      discount_allocations: [{ amount: "2.30", amount_set: money("2.30", "2.00", "EUR") }],
+      tax_lines: [{ price: "1.15", price_set: money("1.15", "1.00", "EUR") }],
+    };
+    const p = mapWebhookLineItemToHubSpot(lineItem, new Set(["price", "amount", "discount", "tax", "hs_line_item_currency_code"]), "EUR").properties;
+    expect(p).toEqual({ price: "10.00", amount: "18.00", discount: "1.00", tax: "1.00", hs_line_item_currency_code: "EUR" });
+  });
+});

@@ -30,6 +30,7 @@ import { associateCompanyContacts } from "../sync/associateCompanyContacts.js";
 import { ConcurrencyLock } from "./concurrencyLock.js";
 import { sendFailureAlert } from "../utils/emailAlert.js";
 import { logger } from "../utils/logger.js";
+import { resolvePreferredLanguage } from "../config/languages.js";
 
 const idempotencyStore = new WebhookIdempotencyStore();
 
@@ -598,6 +599,15 @@ export async function handleOrderWebhook(payload, store) {
         const hubspotContactId = contactMatch.results[0]?.id;
         if (hubspotContactId) {
           await associateRecords("orders", hubspotOrderId, "contacts", hubspotContactId, [orderToContactAssociation]);
+
+          // Preferred Language (SOW section 11: English / Spanish / French /
+          // Italian) from the order's customer_locale - the customer
+          // webhook payload carries no locale (see src/mappings/webhookCustomer.js).
+          // An unmapped locale is left alone rather than guessed.
+          const preferredLanguage = resolvePreferredLanguage(payload.customer_locale);
+          if (preferredLanguage) {
+            await contactsApi.update(hubspotContactId, { preferred_language: preferredLanguage });
+          }
         }
       }
     } catch (error) {
@@ -666,7 +676,11 @@ export async function handleOrderWebhook(payload, store) {
   let lineItemsCreated = 0;
   let lineItemsUpdated = 0;
   for (const lineItem of payload.line_items ?? []) {
-    const { properties: lineItemProperties } = mapWebhookLineItemToHubSpot(lineItem, existingLineItemProperties, payload.currency);
+    const { properties: lineItemProperties } = mapWebhookLineItemToHubSpot(
+      lineItem,
+      existingLineItemProperties,
+      payload.presentment_currency ?? payload.currency,
+    );
     if (Object.keys(lineItemProperties).length === 0) continue;
 
     // Matched via the custom shopify_line_item_id property, checking this

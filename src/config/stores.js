@@ -72,6 +72,34 @@ export const MARKET_BY_STORE = {
 };
 
 /**
+ * Phase 2 (international B2B): the order's market comes from its country,
+ * named after the client's Shopify markets (Settings > Markets): United
+ * States, Italy, Mexico, Guatemala, plus Costa Rica once it is created.
+ * Shopify's own market names can't be read (the app has no read_markets
+ * access), and the US one is labelled in French ("États-Unis"), so the
+ * country is used instead.
+ */
+export const MARKET_BY_COUNTRY = {
+  US: "United States",
+  IT: "Italy",
+  MX: "Mexico",
+  GT: "Guatemala",
+  CR: "Costa Rica",
+};
+
+/**
+ * Market for one order: from the shipping address country, else the
+ * billing address country. A country without a market of its own keeps its
+ * country name; an order with no address at all (e.g. a draft order) falls
+ * back to the store's default market, as in Phase 1.
+ */
+export function resolveOrderMarket(store, { countryCode, countryName } = {}) {
+  if (countryCode && MARKET_BY_COUNTRY[countryCode.toUpperCase()]) return MARKET_BY_COUNTRY[countryCode.toUpperCase()];
+  if (countryName) return countryName;
+  return MARKET_BY_STORE[store.storeId] ?? undefined;
+}
+
+/**
  * Unique key for one Shopify order in HubSpot: "<storeId>:<order gid>",
  * written to the unique-value property shopify_order_key. HubSpot refuses a
  * second record with the same key, so two webhooks for one order processed

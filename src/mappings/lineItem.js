@@ -21,8 +21,9 @@ export function mapShopifyLineItemToHubSpot(lineItem, existingHubSpotProperties)
   const desired = {
     name: lineItem.title,
     quantity: String(lineItem.quantity),
-    price: lineItem.originalUnitPriceSet.shopMoney.amount,
-    amount: lineItem.discountedTotalSet.shopMoney.amount,
+    // Customer's currency, matching the order (see src/mappings/order.js).
+    price: (lineItem.originalUnitPriceSet.presentmentMoney ?? lineItem.originalUnitPriceSet.shopMoney).amount,
+    amount: (lineItem.discountedTotalSet.presentmentMoney ?? lineItem.discountedTotalSet.shopMoney).amount,
     hs_sku: lineItem.sku ?? undefined,
     shopify_variant_id: lineItem.variant?.id,
     shopify_line_item_id: lineItem.id,

@@ -17,6 +17,19 @@ const ORDER_FIELDS = /* GraphQL */ `
       amount
       currencyCode
     }
+    # The customer's currency (e.g. EUR for an Italian order) - Phase 2.
+    presentmentMoney {
+      amount
+      currencyCode
+    }
+  }
+  shippingAddress {
+    countryCodeV2
+    country
+  }
+  billingAddress {
+    countryCodeV2
+    country
   }
   customer {
     id
@@ -49,9 +62,17 @@ const ORDER_FIELDS = /* GraphQL */ `
             amount
             currencyCode
           }
+          presentmentMoney {
+            amount
+            currencyCode
+          }
         }
         discountedTotalSet {
           shopMoney {
+            amount
+            currencyCode
+          }
+          presentmentMoney {
             amount
             currencyCode
           }
